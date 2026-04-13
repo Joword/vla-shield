@@ -18,6 +18,7 @@ monitor/out/
 
 # IDE
 .vscode/
+.cursor/
 .idea/
 *.swp
 *.swo
@@ -35,3 +36,6 @@ Thumbs.db
 
 # Docker
 docker-compose.override.yml
+
+# Docs
+docs/
