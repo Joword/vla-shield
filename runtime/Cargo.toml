@@ -1,0 +1,32 @@
+[workspace]
+resolver = "2"
+members = [
+    "vlashield-core",
+    "vlashield-physics",
+    "vlashield-collision",
+    "vlashield-ros2",
+    "vlashield-io",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+license = "Apache-2.0"
+repository = "https://github.com/your-org/VLA-Shield"
+
+[workspace.dependencies]
+vlashield-core = { path = "vlashield-core" }
+vlashield-physics = { path = "vlashield-physics" }
+vlashield-collision = { path = "vlashield-collision" }
+vlashield-io = { path = "vlashield-io" }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+thiserror = "2"
+uuid = { version = "1", features = ["v4", "serde"] }
+tokio = { version = "1", features = ["full"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
+nalgebra = "0.33"
+pyo3 = { version = "0.22", features = ["extension-module"] }
+redis = { version = "0.27", features = ["tokio-comp", "streams"] }
+sqlx = { version = "0.8", features = ["runtime-tokio", "mysql"] }

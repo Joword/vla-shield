@@ -1,0 +1,50 @@
+[
+  {
+    "id": "SEM.FRAGILE",
+    "severity": "medium",
+    "hard_block": false,
+    "title": "Fragile object",
+    "description": "Action likely to damage fragile entities such as glass, ceramics, or electronics.",
+    "parents": []
+  },
+  {
+    "id": "SEM.HEAT_SOURCE",
+    "severity": "high",
+    "hard_block": true,
+    "title": "Heat source proximity",
+    "description": "End-effector proximity or contact with dangerous heat sources (stove, oven, iron).",
+    "parents": []
+  },
+  {
+    "id": "SEM.FORBIDDEN_REGION",
+    "severity": "high",
+    "hard_block": true,
+    "title": "Forbidden region",
+    "description": "Workspace or semantic zone violation — the robot must not enter this area.",
+    "parents": []
+  },
+  {
+    "id": "SEM.LIQUID_ELECTRICAL",
+    "severity": "critical",
+    "hard_block": true,
+    "title": "Liquid near electrical",
+    "description": "Hazardous combination: pouring or spilling liquid near electrical outlets or devices.",
+    "parents": []
+  },
+  {
+    "id": "SEM.HUMAN_PROXIMITY",
+    "severity": "high",
+    "hard_block": false,
+    "title": "Human proximity",
+    "description": "Fast or forceful motion while a human is within the safety perimeter.",
+    "parents": []
+  },
+  {
+    "id": "SEM.SHARP_OBJECT",
+    "severity": "medium",
+    "hard_block": false,
+    "title": "Sharp object handling",
+    "description": "Manipulating knives, scissors, or other sharp objects toward a person or fragile surface.",
+    "parents": []
+  }
+]

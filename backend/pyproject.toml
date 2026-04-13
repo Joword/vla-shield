@@ -1,0 +1,54 @@
+[project]
+name = "vlashield-backend"
+version = "0.1.0"
+description = "VLA-Shield backend: REST/WebSocket API, VLM semantic risk inference, Safe-RL training, and safety evaluation"
+requires-python = ">=3.10"
+license = { text = "Apache-2.0" }
+dependencies = [
+    "torch>=2.2",
+    "transformers>=4.40",
+    "numpy>=1.26",
+    "pillow>=10.0",
+    "pydantic>=2.5",
+    "httpx>=0.27",
+    "sqlalchemy>=2.0",
+    "pymysql>=1.1",
+    "redis>=5.0",
+    "qdrant-client>=1.8",
+    "fastapi>=0.111",
+    "uvicorn[standard]>=0.29",
+    "websockets>=12.0",
+    "aiomysql>=0.2",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0",
+    "pytest-asyncio>=0.23",
+    "ruff>=0.4",
+    "mypy>=1.10",
+]
+data = [
+    "datasets>=2.19",
+]
+training = [
+    "trl>=0.8",
+    "datasets>=2.19",
+    "wandb>=0.17",
+    "accelerate>=0.30",
+]
+
+[build-system]
+requires = ["setuptools>=69"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+include = ["vlashield*"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py310"
+
+[tool.mypy]
+python_version = "3.10"
+strict = true

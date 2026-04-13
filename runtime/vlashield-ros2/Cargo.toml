@@ -1,0 +1,21 @@
+[package]
+name = "vlashield-ros2"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "ROS 2 integration for vlashield-Runtime (rclrs bridge, QoS, message adapters)"
+
+[dependencies]
+vlashield-core = { workspace = true }
+vlashield-physics = { workspace = true }
+vlashield-collision = { workspace = true }
+vlashield-io = { workspace = true }
+tokio = { workspace = true }
+tracing = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+uuid = { workspace = true }
+
+# rclrs is optional: only builds when ROS 2 SDK is present
+# [target.'cfg(feature = "ros2")'.dependencies]
+# rclrs = "0.4"
