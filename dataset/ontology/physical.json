@@ -30,5 +30,29 @@
     "title": "Velocity limit",
     "description": "Proposed joint or end-effector velocity exceeds the configured safety cap.",
     "parents": []
+  },
+  {
+    "id": "PHY.JOINT_LIMIT",
+    "severity": "high",
+    "hard_block": true,
+    "title": "Joint limit",
+    "description": "Proposed joint position violates URDF <limit lower/upper> for the named joint.",
+    "parents": []
+  },
+  {
+    "id": "PHY.SINGULARITY",
+    "severity": "high",
+    "hard_block": true,
+    "title": "Kinematic singularity",
+    "description": "Arm configuration is near a kinematic singularity (positional manipulability below threshold).",
+    "parents": []
+  },
+  {
+    "id": "PHY.FORBIDDEN_ZONE",
+    "severity": "critical",
+    "hard_block": true,
+    "title": "Forbidden Cartesian zone",
+    "description": "End-effector pose (base or world frame after tf2) enters a forbidden XYZ envelope.",
+    "parents": []
   }
 ]

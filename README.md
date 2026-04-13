@@ -6,7 +6,7 @@
 [![Python](https://img.shields.io/badge/Python-3.10%2B-3776AB?logo=python&logoColor=white)](https://www.python.org/)
 [![Next.js](https://img.shields.io/badge/Next.js-14-000000?logo=next.js)](https://nextjs.org/)
 
-**VLA-Shield** is a model-agnostic, real-time safety filter layer for Vision-Language-Action (VLA) policies. Unlike internal alignment approaches (RLHF/DPO), VLA-Shield operates as a **decoupled runtime middleware** that intercepts raw action outputs, projects them into physical dynamics space, and enforces hard safety constraints --- all within a **< 5 ms** latency budget --- without modifying the base VLA model.
+**VLA-Shield** is a model-agnostic, real-time safety filter layer for Vision-Language-Action (VLA) policies. Unlike **training-time** alignment (e.g. SafeVLA-style constraints on the policy), VLA-Shield operates as a **decoupled runtime middleware** that intercepts raw action outputs, projects them into physical dynamics space, and enforces **hard** safety constraints --- within a **&lt; 5 ms** latency budget --- **without modifying** the base VLA model weights.
 
 > **Status:** Full project scaffold with working types, traits, and tests. Implementation follows the [milestones](#milestones) below.
 
@@ -17,14 +17,16 @@
 | Approach | Modifies Model? | Latency | Deterministic? |
 |----------|:---------------:|:-------:|:--------------:|
 | RLHF/DPO alignment | Yes | Training-time | No |
+| SafeVLA (training-time safety) | Yes | Training / inference | No (soft constraints) |
 | Safety-CHORES (arXiv:2503.03480) | Yes (fine-tuning) | Inference-time | No |
-| **VLA-Shield (ours)** | **No** | **< 5 ms runtime** | **Yes (physics core)** |
+| **VLA-Shield (ours)** | **No** | **&lt; 5 ms runtime** | **Yes (URDF / geometry core)** |
 
 - **Model-Agnostic** --- plug into any VLA (OpenVLA, RT-2, Octo) without retraining.
-- **Semantic-to-Physics Projection** --- translates abstract action vectors into physical-space coordinates for deterministic collision/kinematics checking.
-- **Shadow Path Pre-check** --- lightweight physics core runs a millisecond-level "shadow trajectory" before the real command is dispatched.
-- **Emergency Soft Landing** --- when VLM-based secondary verification detects ambiguous risk (e.g., distinguishing "pour water" vs. "pour oil"), triggers a graceful deceleration protocol.
-- **Off-policy Shielding** --- filter decisions serve as external penalty signals to guide base model preferences without altering architecture.
+- **Semantic-to-Physics Projection** --- maps action vectors to joint / Cartesian checks.
+- **URDF-based Kinematic Verification** --- forward kinematics and joint limits from the robot model (not a learned cost alone).
+- **ROS 2 Lifecycle Hooks** --- `ShieldLifecycleHooks` maps to configure / activate / deactivate for highest-priority interception patterns.
+- **Shadow Path Pre-check** --- lightweight joint-space roll-forward before dispatch.
+- **Emergency Soft Landing** --- when VLM-based secondary verification flags ambiguous semantic risk, trigger a graceful deceleration protocol.
 
 ---
 
@@ -35,24 +37,26 @@ VLA Model ──> VLAShield-Runtime (Rust) ──> ROS 2 Control Stack
                  │                                │
           Semantic-to-Physics              Safe Action
            Projection                     or Soft Landing
-          Shadow Path Pre-check                   │
-          Collision / Kinematics                   ▼
-                 │                           Robot Actuators
+          URDF FK + Singularity hint              │
+          tf2 World-frame zone check              ▼
+          Shadow Path Pre-check              Robot Actuators
+          Collision / Kinematics
+                 │
           Arbiter Decision
                  │
-            Safety Event ──> MySQL + Qdrant
+            Safety Event ──> MySQL
                  │
             Redis Stream ──> WebSocket ──> Monitor UI (Next.js + Three.js)
 ```
 
 | Layer | Tech Stack | Key Metric |
 |-------|-----------|------------|
-| **Shield Runtime** | Rust, ROS 2, Fast-DDS | Filter latency < 5 ms |
-| **Physics Core** | Kinematics engine, AABB broad-phase | Collision prediction > 98% |
-| **Visual Verifier** | CLIP, VLM predictor | Semantic risk detection > 95% |
-| **Backend** | Python, FastAPI, PyTorch | API + Safe-RL training |
-| **Storage** | MySQL, Redis, Qdrant | 1M+ action log retrieval |
-| **Monitor** | Next.js, Three.js, Tailwind | Real-time shadow trajectory @ 30 FPS |
+| **Shield Runtime** | Rust, ROS 2, Fast-DDS | Filter latency &lt; 5 ms |
+| **Physics Core** | URDF FK, AABB broad-phase | Collision / FK checks |
+| **Visual Verifier** | VLM / CLIP (optional path) | Semantic risk (VFV) |
+| **Backend** | Python, FastAPI, PyTorch | API + evaluation |
+| **Storage** | MySQL, Redis | Action / event log |
+| **Monitor** | Next.js, Three.js, Tailwind | Real-time telemetry &gt; 30 FPS |
 
 ---
 
@@ -72,6 +76,8 @@ cd runtime
 cargo build --workspace
 cargo test --workspace
 ```
+
+Optional ROS 2 Rust bindings: `cargo build -p vlashield-ros2 --features ros2` (requires a ROS 2 + Rust overlay).
 
 ### Python Backend
 
@@ -103,6 +109,13 @@ cp deploy/.env.example deploy/.env
 docker compose -f deploy/docker-compose.yml up -d
 ```
 
+### Edge (Jetson / ARM64, API + DB only)
+
+```bash
+cp deploy/edge/.env.jetson.example deploy/edge/.env
+docker compose -f deploy/edge/docker-compose.jetson.yml up -d
+```
+
 ---
 
 ## Repository Structure
@@ -114,18 +127,18 @@ vla-shield/
 │
 ├── runtime/                         Rust real-time shield runtime
 │   ├── vlashield-core/              Core types, ontology, action, arbiter
+│   ├── vlashield-urdf/              URDF parse, FK, forbidden zones
 │   ├── vlashield-physics/           Semantic-to-physics projection, kinematic clamping
 │   ├── vlashield-collision/         Shadow path pre-check, AABB broad-phase
-│   ├── vlashield-ros2/              ROS 2 pipeline, Fast-DDS integration
+│   ├── vlashield-ros2/              ROS 2 pipeline, lifecycle hooks, tf2 validator
 │   └── vlashield-io/                MySQL + Redis I/O layer
 │
 ├── backend/                         Python backend (API + ML + evaluation)
 │   ├── vlashield/
 │   │   ├── api/                     FastAPI REST + WebSocket server
-│   │   ├── vfv/                     Visual Feedback Verification (VLM)
-│   │   ├── training/                Off-policy shielding, Safe-RL penalty
+│   │   ├── vfv/                     Visual Feedback Verification (VLM + shadow sim)
 │   │   ├── evaluation/              Safety benchmark metrics
-│   │   ├── data/                    Dataset download + validation
+│   │   ├── data/                    Dataset smoke path + validation
 │   │   └── schemas.py               Pydantic models (single source of truth)
 │   ├── migrations/                  MySQL DDL (data.sql)
 │   └── tests/
@@ -140,14 +153,16 @@ vla-shield/
 ├── ros2/
 │   └── vla_shield_msgs/             Custom .msg / .srv for ROS 2
 │
-├── dataset/                         Shared data (ontology + red-team)
+├── dataset/                         Shared data (ontology + red-team + URDF samples)
 │   ├── ontology/                    Physical & semantic safety node definitions
-│   └── red_team/                    Schema, samples, downloaded data
+│   ├── red_team/                    Schema, samples, generated data
+│   └── urdf/                        Minimal URDF fixtures for tests
 │
 └── deploy/                          Deployment configuration
     ├── Dockerfile                   Multi-stage (backend + monitor)
-    ├── docker-compose.yml           MySQL, Redis, Qdrant, API, monitor
-    └── .env.example
+    ├── docker-compose.yml           MySQL, Redis, API, monitor
+    ├── .env.example
+    └── edge/                        Jetson-oriented compose + env template
 ```
 
 ---
@@ -156,10 +171,10 @@ vla-shield/
 
 | Phase | Period | Focus |
 |-------|--------|-------|
-| **Phase 1** | Month 1-3 | Multi-dimensional safety ontology + dynamic scene risk dataset |
-| **Phase 2** | Month 4-6 | Rust shield runtime + semantic-to-physics projection + shadow path pre-check |
-| **Phase 3** | Month 7-9 | VLM-based pre-execution visual verification + off-policy shielding feedback |
-| **Phase 4** | Month 10-12 | Real-time monitor with shadow trajectory rendering + deployment on Jetson/RPi |
+| **Phase 1** | Month 1-3 | Physical safety ontology + URDF-linked constraints; embodied risk data |
+| **Phase 2** | Month 4-6 | Rust shield runtime + ROS 2 lifecycle + tf2 world-frame checks + shadow path |
+| **Phase 3** | Month 7-9 | VLM pre-execution visual verification (VFV) + shadow trajectory reference |
+| **Phase 4** | Month 10-12 | Digital-twin monitor + edge deploy (Jetson / RPi) + latency evaluation |
 
 ---
 
@@ -175,18 +190,16 @@ vla-shield/
 
 ## Data
 
-**Manual samples** (`dataset/red_team/samples.jsonl`): 10 bilingual (EN/ZH) entries for smoke testing.
+**Manual samples** (`dataset/red_team/samples.jsonl`): bilingual (EN/ZH) entries for smoke testing.
 
-**Public datasets** (downloaded via backend):
+**Embodied / robotics safety datasets** for red-team JSONL are integrated in Phase 1. Until then, initialize a working file from samples:
 
 ```bash
 cd backend
 pip install -e ".[data]"
-python -m vlashield.data.download --source all --max-samples 5000
+python -m vlashield.data.download
 python -m vlashield.data.validate --data ../dataset/red_team/public.jsonl
 ```
-
-Sources: [BeaverTails](https://huggingface.co/datasets/PKU-Alignment/BeaverTails), [PKU-SafeRLHF](https://huggingface.co/datasets/PKU-Alignment/PKU-SafeRLHF).
 
 ---
 
@@ -222,4 +235,4 @@ Licensed under **Apache License 2.0**. See [LICENSE](LICENSE) for details.
 
 ## Acknowledgments
 
-Built on the open-source robotics, Rust, and ML ecosystems. Inspired by the safety challenges identified in end-to-end VLA deployment research.
+Built on the open-source robotics, Rust, and ML ecosystems. This work targets **deployment-time**, **hard** safety guarantees orthogonally to training-time approaches such as **SafeVLA** and related alignment methods.

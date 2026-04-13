@@ -12,7 +12,7 @@ import { useTelemetryWs } from "@/hooks/useTelemetryWs";
 export default function MonitorPage() {
   const [robotId, setRobotId] = useState("ur5e-lab-01");
   useTelemetryWs(robotId);
-  const { risk, decision, ontologyIds } = useTelemetryStore();
+  const { risk, decision, ontologyIds, ontologyDetails } = useTelemetryStore();
 
   return (
     <div className="flex flex-col h-screen">
@@ -23,7 +23,7 @@ export default function MonitorPage() {
         </div>
         <aside className="w-96 bg-panel border-l border-gray-700 flex flex-col overflow-y-auto">
           <RiskGauge score={risk} decision={decision} />
-          <WhyBlocked ontologyIds={ontologyIds} />
+          <WhyBlocked ontologyIds={ontologyIds} ontologyDetails={ontologyDetails} />
           <EventTimeline robotId={robotId} />
         </aside>
       </div>

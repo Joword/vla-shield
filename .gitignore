@@ -33,8 +33,5 @@ dataset/red_team/public.jsonl
 .DS_Store
 Thumbs.db
 
-# Docs (internal design docs, not published to repo)
-docs/
-
 # Docker
 docker-compose.override.yml

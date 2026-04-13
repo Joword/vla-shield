@@ -1,0 +1,226 @@
+openapi: 3.0.3
+info:
+  title: VLA-Shield Ops API
+  version: 0.1.0
+  description: REST API for querying safety events, risk snapshots, and robot state.
+  license:
+    name: Apache-2.0
+
+servers:
+  - url: http://localhost:8000
+    description: Local development
+
+paths:
+  /v1/robots/{robot_id}/risk:
+    get:
+      operationId: getRisk
+      summary: Current risk snapshot
+      parameters:
+        - $ref: "#/components/parameters/RobotId"
+      responses:
+        "200":
+          description: Risk snapshot
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RiskSnapshot"
+
+  /v1/robots/{robot_id}/events:
+    get:
+      operationId: listEvents
+      summary: List recent safety events
+      parameters:
+        - $ref: "#/components/parameters/RobotId"
+        - in: query
+          name: limit
+          schema:
+            type: integer
+            default: 100
+            maximum: 1000
+        - in: query
+          name: decision
+          schema:
+            type: string
+            enum: [PASS, BLOCK]
+      responses:
+        "200":
+          description: Array of safety events
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/SafetyEventSummary"
+
+  /v1/robots/{robot_id}/events/{event_id}:
+    get:
+      operationId: getEventDetail
+      summary: Full SafetyEvent payload for a specific event
+      parameters:
+        - $ref: "#/components/parameters/RobotId"
+        - in: path
+          name: event_id
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Full safety event payload
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SafetyEvent"
+
+  /v1/robots/{robot_id}/actions:
+    get:
+      operationId: listActions
+      summary: List recent action log entries
+      parameters:
+        - $ref: "#/components/parameters/RobotId"
+        - in: query
+          name: limit
+          schema:
+            type: integer
+            default: 100
+            maximum: 1000
+      responses:
+        "200":
+          description: Array of action log entries
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/ActionLogEntry"
+
+components:
+  parameters:
+    RobotId:
+      in: path
+      name: robot_id
+      required: true
+      schema:
+        type: string
+
+  schemas:
+    RiskSnapshot:
+      type: object
+      properties:
+        robot_id:
+          type: string
+        risk_score:
+          type: number
+          nullable: true
+        arbiter:
+          type: object
+          nullable: true
+          additionalProperties:
+            type: string
+
+    ArbiterReason:
+      type: object
+      properties:
+        ontology_id:
+          type: string
+          description: "Ontology node ID (e.g. PHY.JOINT_LIMIT, PHY.COLLISION)"
+        detail:
+          type: string
+          description: "Human-readable detail (e.g. joint=panda_joint3, limit=2.97rad)"
+        score:
+          type: number
+
+    LatencyBreakdown:
+      type: object
+      properties:
+        ingest_ms:
+          type: number
+        urdf_fk_ms:
+          type: number
+          description: "Time for URDF forward kinematics + singularity check"
+        physics_ms:
+          type: number
+        collision_ms:
+          type: number
+        semantic_ms:
+          type: number
+          nullable: true
+        total_ms:
+          type: number
+
+    SafetyEvent:
+      type: object
+      properties:
+        event_id:
+          type: string
+        ts_ns:
+          type: integer
+          format: int64
+        robot_id:
+          type: string
+        sequence_id:
+          type: integer
+          format: int64
+        decision:
+          type: string
+          enum: [PASS, BLOCK]
+        action_hash:
+          type: string
+        mode:
+          type: string
+          enum: [production, physics_only, monitor, disabled]
+        reasons:
+          type: array
+          items:
+            $ref: "#/components/schemas/ArbiterReason"
+        latency:
+          $ref: "#/components/schemas/LatencyBreakdown"
+
+    SafetyEventSummary:
+      type: object
+      properties:
+        event_id:
+          type: string
+        sequence_id:
+          type: integer
+          format: int64
+        ts_ns:
+          type: integer
+          format: int64
+        decision:
+          type: string
+          enum: [PASS, BLOCK]
+        risk_score:
+          type: number
+          nullable: true
+        ontology_ids:
+          type: array
+          items:
+            type: string
+        latency_total_ms:
+          type: number
+        run_mode:
+          type: string
+
+    ActionLogEntry:
+      type: object
+      properties:
+        sequence_id:
+          type: integer
+          format: int64
+        t_ns:
+          type: integer
+          format: int64
+        decision:
+          type: string
+        risk_score:
+          type: number
+          nullable: true
+        model_id:
+          type: string
+          nullable: true
+        action_dim:
+          type: integer
+        run_mode:
+          type: string
+        latency_total_ms:
+          type: number

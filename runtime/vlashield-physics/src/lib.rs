@@ -20,6 +20,10 @@ pub struct ProjectionContext<'a> {
     pub limits: &'a JointLimits,
     pub scene: &'a SceneGraph,
     pub dt: f64,
+    /// When set, end-effector pose is computed via URDF forward kinematics.
+    pub urdf_chain: Option<&'a vlashield_urdf::UrdfKinematicChain>,
+    /// Cartesian forbidden regions in the same frame as FK (typically base link).
+    pub forbidden_zones: &'a [vlashield_urdf::AxisAlignedBox],
 }
 
 /// Trait for projecting abstract VLA actions into physical-space proposals.
