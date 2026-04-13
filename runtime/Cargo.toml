@@ -2,6 +2,7 @@
 resolver = "2"
 members = [
     "vlashield-core",
+    "vlashield-urdf",
     "vlashield-physics",
     "vlashield-collision",
     "vlashield-ros2",
@@ -16,6 +17,7 @@ repository = "https://github.com/your-org/VLA-Shield"
 
 [workspace.dependencies]
 vlashield-core = { path = "vlashield-core" }
+vlashield-urdf = { path = "vlashield-urdf" }
 vlashield-physics = { path = "vlashield-physics" }
 vlashield-collision = { path = "vlashield-collision" }
 vlashield-io = { path = "vlashield-io" }
@@ -27,6 +29,7 @@ tokio = { version = "1", features = ["full"] }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
 nalgebra = "0.33"
+quick-xml = "0.37"
 pyo3 = { version = "0.22", features = ["extension-module"] }
 redis = { version = "0.27", features = ["tokio-comp", "streams"] }
 sqlx = { version = "0.8", features = ["runtime-tokio", "mysql"] }

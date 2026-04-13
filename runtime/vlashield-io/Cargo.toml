@@ -3,7 +3,7 @@ name = "vlashield-io"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
-description = "I/O layer: MySQL, Redis, Qdrant logging and streaming for VLA-Shield"
+description = "I/O layer: MySQL and Redis logging and streaming for VLA-Shield"
 
 [dependencies]
 vlashield-core = { workspace = true }

@@ -49,6 +49,8 @@ impl SafetyPipeline {
             limits,
             scene,
             dt: self.config.dt,
+            urdf_chain: None,
+            forbidden_zones: &[],
         };
 
         let proposal = self.projector.project(&proj_ctx, action);

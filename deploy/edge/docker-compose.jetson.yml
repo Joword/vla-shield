@@ -1,3 +1,4 @@
+# Edge stack (ARM64 / Jetson): API + DB + Redis only — no Next.js monitor by default.
 version: "3.9"
 
 services:
@@ -10,13 +11,13 @@ services:
     ports:
       - "${MYSQL_PORT:-3306}:3306"
     volumes:
-      - mysql_data:/var/lib/mysql
-      - ../backend/migrations:/docker-entrypoint-initdb.d
+      - mysql_edge_data:/var/lib/mysql
+      - ../../backend/migrations:/docker-entrypoint-initdb.d
     healthcheck:
       test: ["CMD", "mysqladmin", "ping", "-h", "localhost"]
-      interval: 5s
-      timeout: 3s
-      retries: 10
+      interval: 10s
+      timeout: 5s
+      retries: 8
 
   redis:
     image: redis:7-alpine
@@ -31,7 +32,7 @@ services:
 
   api:
     build:
-      context: ..
+      context: ../..
       dockerfile: deploy/Dockerfile
       target: backend
     restart: unless-stopped
@@ -50,18 +51,5 @@ services:
       redis:
         condition: service_healthy
 
-  monitor:
-    build:
-      context: ..
-      dockerfile: deploy/Dockerfile
-      target: monitor
-    restart: unless-stopped
-    ports:
-      - "3000:3000"
-    environment:
-      NEXT_PUBLIC_API_URL: http://api:8000
-    depends_on:
-      - api
-
 volumes:
-  mysql_data:
+  mysql_edge_data:

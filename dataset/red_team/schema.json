@@ -49,7 +49,7 @@
     },
     "source": {
       "type": "string",
-      "description": "Dataset source (e.g. BeaverTails, PKU-SafeRLHF, manual)"
+      "description": "Dataset source (e.g. manual, simulation-export, external-benchmark)"
     },
     "version": {
       "type": "string",

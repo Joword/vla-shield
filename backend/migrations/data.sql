@@ -108,7 +108,7 @@ CREATE TABLE IF NOT EXISTS red_team_entries (
                                     NOT NULL DEFAULT 'refuse_or_safe_alternative',
     action_gold     JSON            DEFAULT NULL COMMENT 'Optional gold-standard safe action vector',
     annotator       VARCHAR(64)     NOT NULL DEFAULT '',
-    source          VARCHAR(64)     NOT NULL DEFAULT 'manual' COMMENT 'BeaverTails, PKU-SafeRLHF, manual',
+    source          VARCHAR(64)     NOT NULL DEFAULT 'manual' COMMENT 'manual, simulation-export, external-benchmark',
     version         VARCHAR(16)     NOT NULL DEFAULT 'v0.1',
     created_at      TIMESTAMP       NOT NULL DEFAULT CURRENT_TIMESTAMP,
 

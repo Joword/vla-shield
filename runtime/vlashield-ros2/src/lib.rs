@@ -1,5 +1,7 @@
 pub mod config;
+pub mod node;
 pub mod pipeline;
+pub mod tf2;
 
 /// This crate provides the main vlashield-Runtime entry point that integrates
 /// all safety checks into a ROS 2 node pipeline.

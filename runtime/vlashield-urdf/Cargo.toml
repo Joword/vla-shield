@@ -1,0 +1,11 @@
+[package]
+name = "vlashield-urdf"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "URDF parsing, forward kinematics, and forbidden-zone checks for VLA-Shield"
+
+[dependencies]
+nalgebra = { workspace = true }
+thiserror = { workspace = true }
+quick-xml = { workspace = true }

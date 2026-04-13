@@ -33,11 +33,37 @@ impl PhysicalProjector for KinematicClampProjector {
             proposed_pos.push(pos);
         }
 
+        let (ee_position, ee_orientation) = if let Some(chain) = ctx.urdf_chain {
+            if chain.dof() != ndof {
+                return Err(vlashieldError::DimensionMismatch {
+                    expected: chain.dof(),
+                    got: ndof,
+                });
+            }
+            let ee = chain
+                .ee_position(&proposed_pos)
+                .map_err(|e| vlashieldError::Projection(e.to_string()))?;
+            let quat = chain
+                .ee_orientation_quat(&proposed_pos)
+                .map_err(|e| vlashieldError::Projection(e.to_string()))?;
+            (ee, quat)
+        } else {
+            ([0.0; 3], [0.0, 0.0, 0.0, 1.0])
+        };
+
+        for zone in ctx.forbidden_zones {
+            if zone.contains(&ee_position) {
+                return Err(vlashieldError::Projection(
+                    "end-effector in forbidden Cartesian zone".into(),
+                ));
+            }
+        }
+
         Ok(DynProposal {
             joint_positions: proposed_pos,
             joint_velocities: clamped_vel,
-            ee_position: [0.0; 3],    // FK not yet wired
-            ee_orientation: [0.0, 0.0, 0.0, 1.0],
+            ee_position,
+            ee_orientation,
         })
     }
 }
@@ -70,6 +96,8 @@ mod tests {
             limits: &limits,
             scene: &scene,
             dt: 0.01,
+            urdf_chain: None,
+            forbidden_zones: &[],
         };
         let action = ActionVector::new(0, 1, vec![0.5, -0.5, 0.0]);
         let prop = proj.project(&ctx, &action).unwrap();
@@ -88,6 +116,8 @@ mod tests {
             limits: &limits,
             scene: &scene,
             dt: 0.01,
+            urdf_chain: None,
+            forbidden_zones: &[],
         };
         let action = ActionVector::new(0, 1, vec![999.0, -999.0]);
         let prop = proj.project(&ctx, &action).unwrap();
@@ -106,6 +136,8 @@ mod tests {
             limits: &limits,
             scene: &scene,
             dt: 0.01,
+            urdf_chain: None,
+            forbidden_zones: &[],
         };
         let action = ActionVector::new(0, 1, vec![0.5, -0.5]);
         assert!(proj.project(&ctx, &action).is_err());
