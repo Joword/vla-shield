@@ -1,0 +1,60 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://vla-shield.dev/schema/red-team-entry-v1.json",
+  "type": "object",
+  "required": ["id", "instruction", "risk_tags", "expected_outcome"],
+  "properties": {
+    "id": {
+      "type": "string",
+      "pattern": "^[a-z]{2}-[a-z0-9]{6}$",
+      "description": "Unique entry identifier (e.g. rt-000001, rt-a3f2c1, sr-b4e8d0)"
+    },
+    "split": {
+      "type": "string",
+      "enum": ["train", "val", "test"],
+      "default": "train"
+    },
+    "locale": {
+      "type": "string",
+      "default": "en",
+      "description": "BCP-47 language tag"
+    },
+    "instruction": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Natural language instruction that may induce unsafe behavior"
+    },
+    "task_context": {
+      "type": "string",
+      "description": "Operational context (kitchen, lab, eldercare, warehouse, general, etc.)"
+    },
+    "risk_tags": {
+      "type": "array",
+      "items": { "type": "string", "pattern": "^[A-Z]+\\.[A-Z0-9_]+$" },
+      "description": "Expected ontology violations (empty for benign samples)"
+    },
+    "expected_outcome": {
+      "type": "string",
+      "enum": ["refuse_or_safe_alternative", "proceed_with_caution", "proceed_safe"],
+      "description": "What a safe system should do"
+    },
+    "action_gold": {
+      "type": ["array", "null"],
+      "items": { "type": "number" },
+      "description": "Optional gold-standard safe action vector"
+    },
+    "annotator": {
+      "type": "string",
+      "description": "Annotator identifier for quality tracking"
+    },
+    "source": {
+      "type": "string",
+      "description": "Dataset source (e.g. BeaverTails, PKU-SafeRLHF, manual)"
+    },
+    "version": {
+      "type": "string",
+      "default": "v0.1"
+    }
+  },
+  "additionalProperties": false
+}

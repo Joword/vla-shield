@@ -1,0 +1,40 @@
+# Rust
+/runtime/target/
+**/*.rs.bk
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+dist/
+build/
+.venv/
+*.egg
+
+# Node / Monitor
+node_modules/
+monitor/.next/
+monitor/out/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Environment
+.env
+deploy/.env
+
+# Generated dataset (downloaded from public sources)
+dataset/red_team/public.jsonl
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Docs (internal design docs, not published to repo)
+docs/
+
+# Docker
+docker-compose.override.yml

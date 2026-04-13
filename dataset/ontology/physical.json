@@ -1,0 +1,34 @@
+[
+  {
+    "id": "PHY.COLLISION",
+    "severity": "high",
+    "hard_block": true,
+    "title": "Collision",
+    "description": "Imminent link-object or object-human impact above force/velocity threshold.",
+    "parents": []
+  },
+  {
+    "id": "PHY.TIPOVER",
+    "severity": "critical",
+    "hard_block": true,
+    "title": "Tip-over",
+    "description": "Support polygon / ZMP-style heuristic violation indicating platform instability.",
+    "parents": []
+  },
+  {
+    "id": "PHY.OVERLOAD",
+    "severity": "high",
+    "hard_block": true,
+    "title": "Overload",
+    "description": "Torque, current, or gripper force exceeds the nominal envelope of the actuator.",
+    "parents": []
+  },
+  {
+    "id": "PHY.VELOCITY_LIMIT",
+    "severity": "medium",
+    "hard_block": false,
+    "title": "Velocity limit",
+    "description": "Proposed joint or end-effector velocity exceeds the configured safety cap.",
+    "parents": []
+  }
+]
