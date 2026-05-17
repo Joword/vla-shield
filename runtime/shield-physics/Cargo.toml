@@ -1,0 +1,16 @@
+[package]
+name = "shield-physics"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Physical projection and conservative dynamics checks for VLA-Shield"
+
+[dependencies]
+shield-core = { workspace = true }
+shield-urdf = { workspace = true }
+nalgebra = { workspace = true }
+thiserror = { workspace = true }
+tracing = { workspace = true }
+
+[dev-dependencies]
+pretty_assertions = "1"

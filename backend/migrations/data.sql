@@ -1,5 +1,5 @@
 -- VLA-Shield database schema for MySQL 8.0+
--- Aligned with: backend/vlashield/schemas.py, runtime/vlashield-core/src/*.rs
+-- Aligned with: backend/shield/schemas.py, runtime/shield-core/src/*.rs
 
 -- ---------------------------------------------------------------------------
 -- robots: registered robot instances
@@ -37,7 +37,7 @@ CREATE TABLE IF NOT EXISTS ontology_nodes (
 -- ---------------------------------------------------------------------------
 -- actions_log: every action evaluated by the safety runtime
 -- Maps to: ActionVector + ArbiterDecision + LatencyBreakdown (schemas.py / arbiter.rs)
--- Written by: vlashield-io MySqlStore.insert_action_log (Rust)
+-- Written by: shield-io MySqlStore.insert_action_log (Rust)
 -- ---------------------------------------------------------------------------
 CREATE TABLE IF NOT EXISTS actions_log (
     id              BIGINT          NOT NULL AUTO_INCREMENT PRIMARY KEY,
@@ -52,7 +52,7 @@ CREATE TABLE IF NOT EXISTS actions_log (
     run_mode        ENUM('production','physics_only','monitor','disabled')
                                     NOT NULL DEFAULT 'production',
     latency_total_ms FLOAT          NOT NULL DEFAULT 0.0,
-    latency_detail  JSON            DEFAULT NULL COMMENT 'Full LatencyBreakdown: ingest/physics/collision/semantic/total',
+    latency_detail  JSON            DEFAULT NULL COMMENT 'Full LatencyBreakdown: ingest/urdf_fk/physics/collision/tf2/arbiter/shadow/total',
     meta            JSON            DEFAULT NULL COMMENT 'Model version, scene revision, etc.',
     created_at      TIMESTAMP(6)    NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
 
@@ -67,7 +67,7 @@ CREATE TABLE IF NOT EXISTS actions_log (
 -- ---------------------------------------------------------------------------
 -- safety_events: structured safety events (primarily blocks)
 -- Maps to: SafetyEvent + ArbiterReason (schemas.py / arbiter.rs)
--- Written by: vlashield-io MySqlStore.insert_safety_event (Rust), queried by API (Python)
+-- Written by: shield-io MySqlStore.insert_safety_event (Rust), queried by API (Python)
 -- ---------------------------------------------------------------------------
 CREATE TABLE IF NOT EXISTS safety_events (
     id              CHAR(36)        NOT NULL PRIMARY KEY COMMENT 'UUID event_id',
@@ -95,7 +95,7 @@ CREATE TABLE IF NOT EXISTS safety_events (
 -- ---------------------------------------------------------------------------
 -- red_team_entries: imported red-team benchmark dataset
 -- Maps to: RedTeamEntry (schemas.py)
--- Written by: vlashield.data.download (Python)
+-- Written by: shield.data.download (Python)
 -- ---------------------------------------------------------------------------
 CREATE TABLE IF NOT EXISTS red_team_entries (
     id              VARCHAR(32)     NOT NULL PRIMARY KEY COMMENT 'e.g. rt-000001, sr-a3f2c1',
@@ -125,13 +125,18 @@ INSERT IGNORE INTO robots (id, name, ros_namespace, model_id, run_mode)
 VALUES ('00000000-0000-0000-0000-000000000001', 'ur5e-lab-01', '/ur5e', 'openvla-7b', 'production');
 
 INSERT IGNORE INTO ontology_nodes (id, severity, hard_block, title, description, parents) VALUES
+-- Physical safety nodes (PHY.*)
 ('PHY.COLLISION',       'high',     TRUE,  'Collision',              'Imminent link-object or object-human impact above force/velocity threshold.', '[]'),
-('PHY.TIPOVER',         'critical', TRUE,  'Tip-over',              'Support polygon / ZMP-style heuristic violation indicating platform instability.', '[]'),
-('PHY.OVERLOAD',        'high',     TRUE,  'Overload',              'Torque, current, or gripper force exceeds the nominal envelope of the actuator.', '[]'),
-('PHY.VELOCITY_LIMIT',  'medium',   FALSE, 'Velocity limit',        'Proposed joint or end-effector velocity exceeds the configured safety cap.', '[]'),
-('SEM.FRAGILE',         'medium',   FALSE, 'Fragile object',        'Action likely to damage fragile entities such as glass, ceramics, or electronics.', '[]'),
-('SEM.HEAT_SOURCE',     'high',     TRUE,  'Heat source proximity', 'End-effector proximity or contact with dangerous heat sources.', '[]'),
-('SEM.FORBIDDEN_REGION','high',     TRUE,  'Forbidden region',      'Workspace or semantic zone violation.', '[]'),
-('SEM.LIQUID_ELECTRICAL','critical', TRUE,  'Liquid near electrical','Hazardous combination: liquid near electrical outlets or devices.', '[]'),
-('SEM.HUMAN_PROXIMITY', 'high',     FALSE, 'Human proximity',       'Fast or forceful motion while a human is within the safety perimeter.', '[]'),
-('SEM.SHARP_OBJECT',    'medium',   FALSE, 'Sharp object handling', 'Manipulating knives, scissors, or other sharp objects toward a person or fragile surface.', '[]');
+('PHY.TIPOVER',         'critical', TRUE,  'Tip-over',               'Support polygon / ZMP-style heuristic violation indicating platform instability.', '[]'),
+('PHY.OVERLOAD',        'high',     TRUE,  'Overload',               'Torque, current, or gripper force exceeds the nominal envelope of the actuator.', '[]'),
+('PHY.VELOCITY_LIMIT',  'medium',   FALSE, 'Velocity limit',         'Proposed joint or end-effector velocity exceeds the configured safety cap.', '[]'),
+('PHY.JOINT_LIMIT',     'high',     TRUE,  'Joint limit exceeded',   'A proposed joint position violates the URDF-specified hard stop (with configurable margin). Prevents mechanical damage and self-collision.', '[]'),
+('PHY.SINGULARITY',     'high',     TRUE,  'Kinematic singularity',  'Positional manipulability index falls below the singularity threshold, indicating a near-degenerate configuration where small command changes produce large forces.', '[]'),
+('PHY.FORBIDDEN_ZONE',  'critical', TRUE,  'Forbidden Cartesian zone','End-effector position enters a statically-defined Cartesian exclusion volume (e.g. human work area, machine guard, fragile surface region).', '[]'),
+-- Semantic safety nodes (SEM.*)
+('SEM.FRAGILE',         'medium',   FALSE, 'Fragile object',         'Action likely to damage fragile entities such as glass, ceramics, or electronics.', '[]'),
+('SEM.HEAT_SOURCE',     'high',     TRUE,  'Heat source proximity',  'End-effector proximity or contact with dangerous heat sources.', '[]'),
+('SEM.FORBIDDEN_REGION','high',     TRUE,  'Forbidden region',       'Workspace or semantic zone violation.', '[]'),
+('SEM.LIQUID_ELECTRICAL','critical',TRUE,  'Liquid near electrical', 'Hazardous combination: liquid near electrical outlets or devices.', '[]'),
+('SEM.HUMAN_PROXIMITY', 'high',     FALSE, 'Human proximity',        'Fast or forceful motion while a human is within the safety perimeter.', '[]'),
+('SEM.SHARP_OBJECT',    'medium',   FALSE, 'Sharp object handling',  'Manipulating knives, scissors, or other sharp objects toward a person or fragile surface.', '[]');

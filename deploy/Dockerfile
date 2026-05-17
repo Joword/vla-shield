@@ -15,10 +15,10 @@ WORKDIR /app
 COPY backend/pyproject.toml ./
 RUN pip install --no-cache-dir .
 
-COPY backend/vlashield/ vlashield/
+COPY backend/shield/ shield/
 
 EXPOSE 8000
-CMD ["uvicorn", "vlashield.api.app:app", "--host", "0.0.0.0", "--port", "8000"]
+CMD ["uvicorn", "shield.api.app:app", "--host", "0.0.0.0", "--port", "8000"]
 
 
 # ---- Monitor: dependency install ----

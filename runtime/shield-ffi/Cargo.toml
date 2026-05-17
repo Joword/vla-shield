@@ -1,0 +1,29 @@
+[package]
+name = "shield-ffi"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "PyO3 FFI bridge: exposes the VLA-Shield hot-path pipeline to Python callers with zero-copy preference and copy-fallback safety."
+
+[lib]
+name = "shield_ffi"
+# Build as a cdylib for Python extension module AND as rlib for Rust tests.
+crate-type = ["cdylib", "rlib"]
+
+[features]
+default = []
+cuda = ["dep:shield-cuda"]
+
+[dependencies]
+shield-core    = { workspace = true }
+shield-physics = { workspace = true }
+shield-collision = { workspace = true }
+shield-cuda    = { workspace = true, optional = true }
+shield-urdf    = { workspace = true }
+pyo3              = { workspace = true }
+# numpy bindings enable the zero-copy `evaluate_numpy` path: borrow `&[f32]`
+# directly from a contiguous numpy ndarray instead of iterating a Python list.
+numpy             = "0.22"
+serde_json        = { workspace = true }
+thiserror         = { workspace = true }
+tracing           = { workspace = true }
