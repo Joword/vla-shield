@@ -6,7 +6,7 @@ services:
     restart: unless-stopped
     environment:
       MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:-changeme}
-      MYSQL_DATABASE: ${MYSQL_DB:-vlashield}
+      MYSQL_DATABASE: ${MYSQL_DB:-shield}
     ports:
       - "${MYSQL_PORT:-3306}:3306"
     volumes:
@@ -42,7 +42,7 @@ services:
       MYSQL_PORT: "3306"
       MYSQL_USER: root
       MYSQL_PASSWORD: ${MYSQL_ROOT_PASSWORD:-changeme}
-      MYSQL_DB: ${MYSQL_DB:-vlashield}
+      MYSQL_DB: ${MYSQL_DB:-shield}
       REDIS_URL: redis://redis:6379
     depends_on:
       mysql:

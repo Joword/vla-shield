@@ -1,6 +1,6 @@
 """Tests for safety evaluation metrics."""
 
-from vlashield.evaluation.metrics import compute_metrics
+from shield.evaluation.metrics import compute_metrics
 
 
 def test_perfect_predictions():

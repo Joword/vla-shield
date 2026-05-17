@@ -1,5 +1,5 @@
 [project]
-name = "vlashield-backend"
+name = "shield-backend"
 version = "0.1.0"
 description = "VLA-Shield backend: REST/WebSocket API, VLM semantic risk inference, and safety evaluation"
 requires-python = ">=3.10"
@@ -36,7 +36,7 @@ requires = ["setuptools>=69"]
 build-backend = "setuptools.build_meta"
 
 [tool.setuptools.packages.find]
-include = ["vlashield*"]
+include = ["shield*"]
 
 [tool.ruff]
 line-length = 100

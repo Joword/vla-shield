@@ -1,0 +1,101 @@
+[
+  {
+    "rule_id": "PHY.COLLISION",
+    "trigger_condition": "broad_phase_aabb_hit",
+    "threshold": {
+      "type": "scalar",
+      "energy_lower_bound_j": 0.0,
+      "epsilon_m": 0.02
+    },
+    "action": "block",
+    "severity": "high",
+    "hard_block": true,
+    "explanation_template": "Collision detected between link {link} and obstacle {obstacle} (min_distance={min_distance:.4f} m).",
+    "applies_to": [],
+    "disabled": false
+  },
+  {
+    "rule_id": "PHY.TIPOVER",
+    "trigger_condition": "zmp_outside_support_polygon",
+    "threshold": {
+      "type": "scalar",
+      "margin_m": 0.05
+    },
+    "action": "block",
+    "severity": "critical",
+    "hard_block": true,
+    "explanation_template": "Platform tip-over risk: ZMP at ({zmp_x:.3f}, {zmp_y:.3f}) m is outside support polygon (margin={margin_m} m).",
+    "applies_to": [],
+    "disabled": false
+  },
+  {
+    "rule_id": "PHY.OVERLOAD",
+    "trigger_condition": "joint_torque_exceeds_nominal",
+    "threshold": {
+      "type": "scalar",
+      "safety_factor": 1.0
+    },
+    "action": "block",
+    "severity": "high",
+    "hard_block": true,
+    "explanation_template": "Actuator overload on joint {joint_name}: estimated torque {torque:.2f} Nm exceeds nominal {nominal:.2f} Nm.",
+    "applies_to": [],
+    "disabled": false
+  },
+  {
+    "rule_id": "PHY.VELOCITY_LIMIT",
+    "trigger_condition": "joint_velocity_exceeds_cap",
+    "threshold": {
+      "type": "scalar",
+      "safety_factor": 1.0
+    },
+    "action": "clamp",
+    "severity": "medium",
+    "hard_block": false,
+    "explanation_template": "Velocity cap exceeded on joint {joint_name}: requested {requested:.3f} rad/s, limit {limit:.3f} rad/s. Command clamped.",
+    "applies_to": [],
+    "disabled": false
+  },
+  {
+    "rule_id": "PHY.JOINT_LIMIT",
+    "trigger_condition": "joint_position_out_of_urdf_limit",
+    "threshold": {
+      "type": "urdf_limit",
+      "margin_rad": 0.01
+    },
+    "action": "block",
+    "severity": "high",
+    "hard_block": true,
+    "explanation_template": "Joint {joint_name} position {value:.3f} rad violates URDF limit [{lower:.3f}, {upper:.3f}] rad (margin={margin_rad} rad).",
+    "applies_to": [],
+    "disabled": false
+  },
+  {
+    "rule_id": "PHY.SINGULARITY",
+    "trigger_condition": "manipulability_below_threshold",
+    "threshold": {
+      "type": "manipulability",
+      "min_manipulability": 0.05
+    },
+    "action": "block",
+    "severity": "high",
+    "hard_block": true,
+    "explanation_template": "Kinematic singularity: positional manipulability {manipulability:.4f} is below threshold {min_manipulability:.4f}.",
+    "applies_to": [],
+    "disabled": false
+  },
+  {
+    "rule_id": "PHY.FORBIDDEN_ZONE",
+    "trigger_condition": "ee_position_inside_aabb",
+    "threshold": {
+      "type": "aabb",
+      "frame": "base_link"
+    },
+    "action": "block",
+    "severity": "critical",
+    "hard_block": true,
+    "explanation_template": "End-effector at ({x:.3f}, {y:.3f}, {z:.3f}) m entered forbidden Cartesian zone \"{zone_name}\" in frame {frame}.",
+    "applies_to": [],
+    "disabled": false
+  }
+]

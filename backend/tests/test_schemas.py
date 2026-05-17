@@ -3,7 +3,7 @@
 import pytest
 from pydantic import ValidationError
 
-from vlashield.schemas import OntologyNode, RedTeamEntry, Severity
+from shield.schemas import OntologyNode, RedTeamEntry, Severity
 
 
 def test_ontology_node_valid():

@@ -1,0 +1,88 @@
+[
+  {
+    "rule_id": "SEM.FRAGILE",
+    "trigger_condition": "vfv_fragile_score_exceeds_threshold",
+    "threshold": {
+      "type": "scalar",
+      "min_score": 0.6
+    },
+    "action": "warn",
+    "severity": "medium",
+    "hard_block": false,
+    "explanation_template": "Fragile object risk detected by VFV (score={score:.2f}): action may damage {object_label}.",
+    "applies_to": [],
+    "disabled": false
+  },
+  {
+    "rule_id": "SEM.HEAT_SOURCE",
+    "trigger_condition": "vfv_heat_source_proximity",
+    "threshold": {
+      "type": "scalar",
+      "min_score": 0.7,
+      "proximity_m": 0.15
+    },
+    "action": "block",
+    "severity": "high",
+    "hard_block": true,
+    "explanation_template": "Heat source proximity: VFV score={score:.2f}, estimated distance={distance:.3f} m to {heat_label}.",
+    "applies_to": [],
+    "disabled": false
+  },
+  {
+    "rule_id": "SEM.FORBIDDEN_REGION",
+    "trigger_condition": "semantic_zone_violation",
+    "threshold": {
+      "type": "aabb",
+      "frame": "world"
+    },
+    "action": "block",
+    "severity": "high",
+    "hard_block": true,
+    "explanation_template": "Semantic forbidden region \"{region_name}\" violated: end-effector or payload projected to ({x:.3f}, {y:.3f}, {z:.3f}) m.",
+    "applies_to": [],
+    "disabled": false
+  },
+  {
+    "rule_id": "SEM.LIQUID_ELECTRICAL",
+    "trigger_condition": "vfv_liquid_electrical_hazard",
+    "threshold": {
+      "type": "scalar",
+      "min_score": 0.65
+    },
+    "action": "block",
+    "severity": "critical",
+    "hard_block": true,
+    "explanation_template": "Liquid-electrical hazard: VFV score={score:.2f}. Liquid trajectory intersects electrical zone \"{electrical_label}\".",
+    "applies_to": [],
+    "disabled": false
+  },
+  {
+    "rule_id": "SEM.HUMAN_PROXIMITY",
+    "trigger_condition": "human_within_safety_perimeter",
+    "threshold": {
+      "type": "scalar",
+      "perimeter_m": 0.5,
+      "velocity_threshold_ms": 0.3
+    },
+    "action": "warn",
+    "severity": "high",
+    "hard_block": false,
+    "explanation_template": "Human proximity: detected person within {perimeter_m} m safety perimeter. End-effector velocity {ee_velocity:.3f} m/s exceeds threshold {velocity_threshold_ms} m/s.",
+    "applies_to": [],
+    "disabled": false
+  },
+  {
+    "rule_id": "SEM.SHARP_OBJECT",
+    "trigger_condition": "vfv_sharp_object_trajectory",
+    "threshold": {
+      "type": "scalar",
+      "min_score": 0.6
+    },
+    "action": "warn",
+    "severity": "medium",
+    "hard_block": false,
+    "explanation_template": "Sharp object handling risk: VFV score={score:.2f}. Trajectory of {object_label} may endanger person or surface within {distance:.3f} m.",
+    "applies_to": [],
+    "disabled": false
+  }
+]

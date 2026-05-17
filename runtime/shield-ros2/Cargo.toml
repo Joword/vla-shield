@@ -1,0 +1,25 @@
+[package]
+name = "shield-ros2"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "ROS 2 integration for shield-Runtime (rclrs bridge, QoS, message adapters)"
+
+[features]
+default = []
+ros2 = ["dep:rclrs"]
+
+[dependencies]
+shield-core      = { workspace = true }
+shield-physics   = { workspace = true }
+shield-collision = { workspace = true }
+shield-io        = { workspace = true }
+shield-urdf      = { workspace = true }
+shield-shadow    = { workspace = true }
+nalgebra = { workspace = true }
+tokio = { workspace = true }
+tracing = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+uuid = { workspace = true }
+rclrs = { version = "0.4", optional = true }

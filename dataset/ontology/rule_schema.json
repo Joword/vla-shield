@@ -1,0 +1,61 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://vla-shield.dev/schema/rule-entry-v1.json",
+  "title": "VLA-Shield Rule Entry",
+  "description": "Executable safety rule schema. Each rule maps an ontology node to a deterministic trigger condition and enforcement action.",
+  "type": "object",
+  "required": ["rule_id", "trigger_condition", "threshold", "action", "severity", "explanation_template"],
+  "properties": {
+    "rule_id": {
+      "type": "string",
+      "pattern": "^[A-Z]+\\.[A-Z0-9_]+$",
+      "description": "Stable identifier matching the ontology node ID (e.g. PHY.JOINT_LIMIT)"
+    },
+    "trigger_condition": {
+      "type": "string",
+      "description": "Machine-readable condition key that the runtime evaluates (e.g. joint_position_out_of_urdf_limit)"
+    },
+    "threshold": {
+      "type": "object",
+      "description": "Typed threshold parameters consumed by the trigger evaluator",
+      "properties": {
+        "type": {
+          "type": "string",
+          "description": "Threshold variant: urdf_limit | scalar | aabb | velocity | manipulability | none"
+        }
+      },
+      "required": ["type"],
+      "additionalProperties": true
+    },
+    "action": {
+      "type": "string",
+      "enum": ["block", "clamp", "warn"],
+      "description": "Enforcement action: block halts execution; clamp projects to safe boundary; warn logs without blocking"
+    },
+    "severity": {
+      "type": "string",
+      "enum": ["info", "low", "medium", "high", "critical"]
+    },
+    "hard_block": {
+      "type": "boolean",
+      "description": "True when action == block and cannot be overridden by run_mode (except monitor/disabled)",
+      "default": false
+    },
+    "explanation_template": {
+      "type": "string",
+      "description": "Template string for human-readable explanations. Named placeholders in {braces} are filled by the runtime."
+    },
+    "applies_to": {
+      "type": "array",
+      "items": { "type": "string" },
+      "description": "Optional list of robot platform IDs this rule applies to. Empty means all platforms.",
+      "default": []
+    },
+    "disabled": {
+      "type": "boolean",
+      "description": "When true the rule is loaded but not evaluated. Useful for staged rollout.",
+      "default": false
+    }
+  },
+  "additionalProperties": false
+}

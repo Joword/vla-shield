@@ -1,0 +1,17 @@
+[package]
+name = "shield-core"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Core types, ontology IDs, action representation, and error taxonomy for VLA-Shield"
+
+[dependencies]
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+uuid = { workspace = true }
+nalgebra = { workspace = true }
+sha2 = "0.10"
+
+[dev-dependencies]
+pretty_assertions = "1"

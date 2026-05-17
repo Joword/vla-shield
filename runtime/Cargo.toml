@@ -1,12 +1,15 @@
 [workspace]
 resolver = "2"
 members = [
-    "vlashield-core",
-    "vlashield-urdf",
-    "vlashield-physics",
-    "vlashield-collision",
-    "vlashield-ros2",
-    "vlashield-io",
+    "shield-core",
+    "shield-urdf",
+    "shield-physics",
+    "shield-collision",
+    "shield-cuda",
+    "shield-ros2",
+    "shield-io",
+    "shield-ffi",
+    "shield-shadow",
 ]
 
 [workspace.package]
@@ -16,11 +19,13 @@ license = "Apache-2.0"
 repository = "https://github.com/your-org/VLA-Shield"
 
 [workspace.dependencies]
-vlashield-core = { path = "vlashield-core" }
-vlashield-urdf = { path = "vlashield-urdf" }
-vlashield-physics = { path = "vlashield-physics" }
-vlashield-collision = { path = "vlashield-collision" }
-vlashield-io = { path = "vlashield-io" }
+shield-core      = { path = "shield-core" }
+shield-urdf      = { path = "shield-urdf" }
+shield-physics   = { path = "shield-physics" }
+shield-collision = { path = "shield-collision" }
+shield-cuda      = { path = "shield-cuda" }
+shield-io        = { path = "shield-io" }
+shield-shadow    = { path = "shield-shadow" }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 thiserror = "2"

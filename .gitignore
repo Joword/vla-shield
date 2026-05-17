@@ -10,6 +10,7 @@ dist/
 build/
 .venv/
 *.egg
+tests/
 
 # Node / Monitor
 node_modules/
@@ -39,3 +40,4 @@ docker-compose.override.yml
 
 # Docs
 docs/
+paper/
