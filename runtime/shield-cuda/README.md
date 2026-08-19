@@ -67,6 +67,26 @@ reallocated to fit; the new capacity is sticky.  The Rust side enforces
 `input.len() == limit.len()` and `output.len() ≥ input.len()` before crossing
 the FFI boundary.
 
+## Small-n CPU bypass
+
+Typical VLA arms are 6–14 DoF.  A kernel launch plus two H↔D copies is slower
+than a scalar clamp at that size, so `CudaCtx::clamp_into` **never crosses
+into C++/CUDA** when `n < min_gpu_n`.
+
+| `n` | Default (`min_gpu_n = 64`) | Forced (`min_gpu_n = 0`) |
+|---|---|---|
+| 6–14 (serial arm) | CPU scalar loop | C backend (kernel or stub) |
+| ≥ 64 | C backend | C backend |
+
+Override:
+
+* env `SHIELD_CUDA_MIN_GPU_N` (read at `CudaCtx::new`)
+* `ctx.set_min_gpu_n(0)` / `--force-gpu` on `bench_clamp`
+
+`last_path()` reports `ClampPath::Cpu` or `ClampPath::Backend` after each call.
+The C++ host layer itself always runs the GPU path when invoked, so A/B
+benches remain honest.
+
 ## Build behavior
 
 `build.rs` probes `nvcc --version`:
@@ -99,10 +119,13 @@ initialisation and reuses it on every `evaluate()` call — there is no
 ```bash
 cd runtime
 cargo run -p shield-cuda --example bench_clamp --release -- --iters 100000 --dof 8
+cargo run -p shield-cuda --example bench_clamp --release -- --iters 20000 --dof 256
+cargo run -p shield-cuda --example bench_clamp --release -- --iters 100000 --dof 8 --force-gpu
 ```
 
-Reports p50 / p95 / p99 / mean / max in microseconds for both the stateless
-path and the cached-context path, plus the median speedup.
+Reports p50 / p95 / p99 / mean / max (µs) for four paths: CPU bypass, forced
+C backend, default `CudaCtx` policy, and stateless one-shot.  At `--dof 8`
+the headline number is **CPU bypass vs forced backend**; CPU should win.
 
 ## Testing
 
@@ -115,4 +138,5 @@ cargo test -p shield-cuda                # CUDA backend (when nvcc is on PATH)
 
 The integration tests in `tests/ctx.rs` exercise: basic clamp correctness,
 1000-call reuse, lazy capacity growth, dimension-mismatch and short-output
-error paths, and the empty-input no-op.
+error paths, the empty-input no-op, small-n CPU bypass, and CPU vs forced
+backend numerical agreement.

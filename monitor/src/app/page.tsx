@@ -25,10 +25,14 @@ export default function MonitorPage() {
         </div>
         <aside className="w-96 bg-panel border-l border-gray-700 flex flex-col overflow-y-auto">
           <RiskGauge score={risk} decision={decision} />
-          <WhyBlocked ontologyIds={ontologyIds} ontologyDetails={ontologyDetails} />
+          <WhyBlocked
+            ontologyIds={ontologyIds}
+            ontologyDetails={ontologyDetails}
+            decision={decision}
+          />
           <LatencyChart />
           <RuleViewer activeRuleIds={ontologyIds} />
-          <EventTimeline robotId={robotId} />
+          <EventTimeline />
         </aside>
       </div>
     </div>

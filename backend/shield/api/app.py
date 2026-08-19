@@ -3,11 +3,14 @@
 from __future__ import annotations
 
 import asyncio
+import base64
+import io
 import json
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import AsyncGenerator
 
+import numpy as np
 import redis.asyncio as aioredis
 from fastapi import Body, FastAPI, Query, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
@@ -34,6 +37,27 @@ def load_rules(domain: str | None = None) -> list[dict]:
     if domain == "semantic":
         return [r for r in merged if str(r.get("rule_id", "")).startswith("SEM.")]
     return merged
+
+
+def _decode_image(raw: object) -> np.ndarray | None:
+    """Accept a base64 data-URL / raw base64 PNG/JPEG, or an HWC uint8 nested list."""
+    if raw is None:
+        return None
+    if isinstance(raw, list):
+        arr = np.asarray(raw, dtype=np.uint8)
+        if arr.ndim == 3 and arr.shape[-1] >= 3:
+            return arr
+        return None
+    if not isinstance(raw, str) or not raw.strip():
+        return None
+    payload = raw.split(",", 1)[-1]
+    try:
+        from PIL import Image
+
+        img = Image.open(io.BytesIO(base64.b64decode(payload))).convert("RGB")
+        return np.asarray(img, dtype=np.uint8)
+    except Exception:
+        return None
 
 
 @asynccontextmanager
@@ -95,6 +119,9 @@ async def evaluate_action(payload: dict = Body(default_factory=dict)) -> dict:
         sequence_id = 0
     current_raw = payload.get("current_joints")
     current = [float(v) for v in current_raw] if isinstance(current_raw, list) else []
+    hints_raw = payload.get("scene_hints") or payload.get("risk_tags") or []
+    scene_hints = [str(h) for h in hints_raw] if isinstance(hints_raw, list) else []
+    language_task = str(payload.get("language_task") or payload.get("task") or "")
     result = app.state.evaluator.evaluate(
         EvalInput(
             robot_id=robot_id,
@@ -102,6 +129,9 @@ async def evaluate_action(payload: dict = Body(default_factory=dict)) -> dict:
             t_ns=t_ns,
             sequence_id=sequence_id,
             current_joints=current,
+            language_task=language_task,
+            scene_hints=scene_hints,
+            image=_decode_image(payload.get("image")),
         )
     )
 
@@ -136,8 +166,15 @@ async def evaluate_action(payload: dict = Body(default_factory=dict)) -> dict:
         "decision": result["decision"],
         "ontology_ids": result["ontology_ids"],
         "ontology_details": result["ontology_details"],
-        "scene_rev": 0,
+        "scene_rev": result.get("scene_rev", 0),
         "latency": result["latency"],
+        "current_joints": result.get("current_joints", []),
+        "projected_joints": result.get("projected_joints", []),
+        "skeleton": result.get("skeleton", []),
+        "shadow_path": result.get("shadow_path", []),
+        "ee": result.get("ee"),
+        "zones": result.get("zones", []),
+        "vfv_backend": result.get("vfv_backend", "none"),
     }
     await r.xadd(
         f"stream:telemetry:{robot_id}",

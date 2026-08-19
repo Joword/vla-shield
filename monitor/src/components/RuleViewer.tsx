@@ -1,42 +1,47 @@
 "use client";
 
 import { useEffect, useState } from "react";
-
-interface RuleEntry {
-  rule_id: string;
-  trigger_condition: string;
-  action: "block" | "clamp" | "warn";
-  severity: "info" | "low" | "medium" | "high" | "critical";
-  hard_block: boolean;
-  explanation_template: string;
-  disabled: boolean;
-}
+import { useRules, RuleEntry } from "@/hooks/useRules";
 
 const ACTION_BADGE: Record<string, string> = {
   block: "bg-danger/20 text-danger border border-danger/40",
   clamp: "bg-yellow-500/20 text-yellow-400 border border-yellow-500/40",
-  warn:  "bg-blue-500/20 text-blue-400 border border-blue-500/40",
+  warn: "bg-blue-500/20 text-blue-400 border border-blue-500/40",
 };
 
 const SEVERITY_COLOR: Record<string, string> = {
   critical: "text-red-400",
-  high:     "text-orange-400",
-  medium:   "text-yellow-400",
-  low:      "text-blue-400",
-  info:     "text-gray-400",
+  high: "text-orange-400",
+  medium: "text-yellow-400",
+  low: "text-blue-400",
+  info: "text-gray-400",
 };
 
-function RuleRow({ rule }: { rule: RuleEntry }) {
-  const [expanded, setExpanded] = useState(false);
+function RuleRow({
+  rule,
+  active,
+}: {
+  rule: RuleEntry;
+  active: boolean;
+}) {
+  const [expanded, setExpanded] = useState(active);
+
+  useEffect(() => {
+    if (active) setExpanded(true);
+  }, [active]);
+
   return (
     <li
-      className={`text-xs border-b border-gray-700/60 last:border-0 ${rule.disabled ? "opacity-40" : ""}`}
+      className={`text-xs border-b border-gray-700/60 last:border-0 ${
+        rule.disabled ? "opacity-40" : ""
+      } ${active ? "bg-indigo-500/10" : ""}`}
     >
       <button
         className="w-full flex items-center gap-2 py-1.5 px-1 text-left hover:bg-white/5 transition-colors"
         onClick={() => setExpanded((e) => !e)}
         aria-expanded={expanded}
       >
+        {active && <span className="w-1.5 h-1.5 rounded-full bg-indigo-400 flex-shrink-0" />}
         <code className="text-gray-300 flex-1">{rule.rule_id}</code>
         <span
           className={`px-1.5 py-0.5 rounded text-[10px] font-semibold uppercase ${ACTION_BADGE[rule.action] ?? ""}`}
@@ -59,7 +64,9 @@ function RuleRow({ rule }: { rule: RuleEntry }) {
             {rule.explanation_template}
           </p>
           {rule.hard_block && (
-            <p className="text-danger text-[10px] font-semibold">⬛ hard block — cannot be overridden</p>
+            <p className="text-danger text-[10px] font-semibold">
+              ⬛ hard block — cannot be overridden
+            </p>
           )}
           {rule.disabled && (
             <p className="text-gray-500 text-[10px]">⏸ rule is disabled</p>
@@ -71,36 +78,12 @@ function RuleRow({ rule }: { rule: RuleEntry }) {
 }
 
 interface RuleViewerProps {
-  /** Optionally highlight currently triggered rule IDs. */
   activeRuleIds?: string[];
 }
 
 export default function RuleViewer({ activeRuleIds = [] }: RuleViewerProps) {
-  const [rules, setRules] = useState<RuleEntry[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
+  const { rules, loading, error } = useRules();
   const [filter, setFilter] = useState<"all" | "block" | "active">("all");
-
-  useEffect(() => {
-    async function fetchRules() {
-      try {
-        const [phyRes, semRes] = await Promise.all([
-          fetch("/v1/rules?domain=physical"),
-          fetch("/v1/rules?domain=semantic"),
-        ]);
-        const phyPayload: { rules: RuleEntry[] } = await phyRes.json();
-        const semPayload: { rules: RuleEntry[] } = await semRes.json();
-        const phy = phyPayload.rules ?? [];
-        const sem = semPayload.rules ?? [];
-        setRules([...phy, ...sem]);
-      } catch (e) {
-        setError(String(e));
-      } finally {
-        setLoading(false);
-      }
-    }
-    fetchRules();
-  }, []);
 
   const displayed = rules.filter((r) => {
     if (filter === "block") return r.action === "block";
@@ -114,7 +97,6 @@ export default function RuleViewer({ activeRuleIds = [] }: RuleViewerProps) {
         Active Rule Set
       </h2>
 
-      {/* Filter tabs */}
       <div className="flex gap-1 mb-3 text-xs">
         {(["all", "block", "active"] as const).map((f) => (
           <button
@@ -140,7 +122,11 @@ export default function RuleViewer({ activeRuleIds = [] }: RuleViewerProps) {
 
       <ul>
         {displayed.map((rule) => (
-          <RuleRow key={rule.rule_id} rule={rule} />
+          <RuleRow
+            key={rule.rule_id}
+            rule={rule}
+            active={activeRuleIds.includes(rule.rule_id)}
+          />
         ))}
       </ul>
 

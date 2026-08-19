@@ -17,6 +17,10 @@
 //        * one persistent CUDA stream for async copies + launches.
 //      Subsequent calls with n <= capacity reuse all of the above; calls with
 //      n > capacity transparently grow the buffers.
+//
+// Small-n CPU bypass lives in the Rust wrapper (CudaCtx::clamp_into).
+// This file always runs the GPU path when invoked, so A/B benches can
+// force the kernel with CudaCtx::set_min_gpu_n(0).
 
 #include <cuda_runtime.h>
 #include <stddef.h>

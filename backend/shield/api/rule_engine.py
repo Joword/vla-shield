@@ -62,6 +62,29 @@ class RuleRegistry:
         rule = self._rules.get(rule_id)
         return rule.severity if rule else "medium"
 
+    def decide(self, rule_ids: Iterable[str]) -> str:
+        """Collapse triggered rule actions into a single verdict.
+
+        Precedence: any ``block`` / ``hard_block`` → ``BLOCK``; else any
+        ``clamp`` → ``CLAMP``; else any ``warn`` → ``WARN``; else ``PASS``.
+        Unknown ids fail closed (``BLOCK``).
+        """
+        rank = 0
+        for rid in rule_ids:
+            rule = self._rules.get(rid)
+            if rule is None:
+                rank = max(rank, 3)
+                continue
+            action = "block" if rule.hard_block else rule.action
+            rank = max(rank, {"block": 3, "clamp": 2, "warn": 1}.get(action, 3))
+        if rank >= 3:
+            return "BLOCK"
+        if rank == 2:
+            return "CLAMP"
+        if rank == 1:
+            return "WARN"
+        return "PASS"
+
     @classmethod
     def load(cls, ontology_dir: Path) -> "RuleRegistry":
         entries: list[Rule] = []

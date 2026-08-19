@@ -4,10 +4,13 @@
 //!
 //! ```text
 //! Python VLA model
-//!      │  action: list[float]  (or numpy array cast to list)
+//!      │  action: list[float]  or  numpy.ndarray[float32]  (contiguous)
 //!      ▼
-//! PyShieldPipeline.evaluate(action, t_ns, sequence_id)
-//!      │  (PyO3 FFI — copy-based; zero-copy variant via buffer protocol is planned)
+//! PyShieldPipeline.evaluate(...)          ← copies list → Vec
+//! PyShieldPipeline.evaluate_numpy(...)    ← zero-copy borrow of ndarray
+//!      │  both share evaluate_impl(&[f32], &[f64], ...)
+//!      ▼
+//! Optional CUDA pre-clamp (small-n stays on CPU; see shield-cuda)
 //!      ▼
 //! Rust: KinematicClampProjector → AabbBroadPhase → inline arbiter
 //!      │
@@ -15,11 +18,13 @@
 //! PyDecision { decision: "PASS"|"BLOCK", reasons: [...], latency: {...} }
 //! ```
 //!
-//! # Zero-copy note
-//! Full GPU zero-copy (sharing `tensor.data_ptr()`) requires a CUDA-aware
-//! allocator and pinned-memory contract between Python and Rust.  The current
-//! implementation copies the action slice across the FFI boundary.  A
-//! `zero_copy` feature flag is reserved for the CUDA extension module.
+//! # Copying vs zero-copy
+//!
+//! * **Host zero-copy** is already implemented: `evaluate_numpy` borrows
+//!   contiguous `numpy.ndarray` buffers via PyO3 (`PyReadonlyArray1`).
+//! * **Device zero-copy** (`tensor.data_ptr()` shared with CUDA) is not
+//!   implemented.  Typical VLA DoF (6–14) is below the GPU bypass threshold,
+//!   so a device round-trip would not pay off.
 
 pub mod convert;
 pub mod error;
@@ -283,8 +288,10 @@ impl PyShieldPipeline {
 
         // Working copy of the action that downstream stages will see; starts
         // as a verbatim copy of the raw input and is overwritten by the CUDA
-        // clamp when that feature is active.  Keeping the original `action_in`
-        // alive lets pre-detection observe the *unclamped* values.
+        // pre-clamp when that feature is active.  CudaCtx skips the GPU for
+        // n < min_gpu_n (default 64), so 6–14 DoF arms stay on a scalar loop.
+        // Keeping the original `action_in` alive lets pre-detection observe
+        // the *unclamped* values.
         let mut action_clamped: Vec<f32> = action_in.to_vec();
 
         #[cfg(feature = "cuda")]

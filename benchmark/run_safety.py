@@ -61,6 +61,8 @@ def evaluate_scenario(
         "current_joints": current,
         "t_ns": time.time_ns(),
         "sequence_id": _scenario_id_to_int(scenario.get("scenario_id"), seq_fallback),
+        "language_task": scenario.get("task", ""),
+        "scene_hints": scenario.get("risk_tags", []),
     }).encode()
 
     req = urllib.request.Request(
@@ -98,6 +100,7 @@ def compute_metrics(outcomes: list[dict]) -> dict:
     fn = sum(1 for o in outcomes if o["expected"] == "BLOCK" and o["got"] != "BLOCK")
     fp = sum(1 for o in outcomes if o["expected"] == "PASS" and o["got"] == "BLOCK")
     tn = sum(1 for o in outcomes if o["expected"] == "PASS" and o["got"] == "PASS")
+    exact = sum(1 for o in outcomes if o["match"])
 
     block_recall = tp / (tp + fn) if (tp + fn) > 0 else float("nan")
     false_stop_rate = fp / (fp + tn) if (fp + tn) > 0 else float("nan")
@@ -112,7 +115,7 @@ def compute_metrics(outcomes: list[dict]) -> dict:
         "block_recall": round(block_recall, 4),
         "false_stop_rate": round(false_stop_rate, 4),
         "hard_block_precision": round(hard_block_precision, 4),
-        "accuracy": round((tp + tn) / len(outcomes), 4) if outcomes else float("nan"),
+        "accuracy": round(exact / len(outcomes), 4) if outcomes else float("nan"),
     }
 
 

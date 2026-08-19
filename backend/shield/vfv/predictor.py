@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 import numpy as np
 
@@ -13,6 +13,10 @@ class VFVResult:
     hazard_score: float
     triggered_ontology_ids: list[str]
     predicted_frame: np.ndarray | None = None
+    # Joint-space samples along the shadow roll-forward, including q0.
+    trajectory: list[list[float]] = field(default_factory=list)
+    scores: dict[str, float] = field(default_factory=dict)
+    backend: str = "none"
 
 
 @dataclass
@@ -34,6 +38,7 @@ class VFVPredictor(ABC):
         action: list[float],
         language_task: str,
         current_joints: list[float] | None = None,
+        scene_hints: list[str] | None = None,
     ) -> VFVResult:
         """Predict safety risk of executing `action` given current `image` and task."""
         ...
@@ -48,8 +53,10 @@ class DummyVFVPredictor(VFVPredictor):
         action: list[float],
         language_task: str,
         current_joints: list[float] | None = None,
+        scene_hints: list[str] | None = None,
     ) -> VFVResult:
-        return VFVResult(hazard_score=0.0, triggered_ontology_ids=[])
+        del image, language_task, current_joints, scene_hints
+        return VFVResult(hazard_score=0.0, triggered_ontology_ids=[], backend="dummy")
 
 
 class ShadowSimPredictor(VFVPredictor):
@@ -80,8 +87,9 @@ class ShadowSimPredictor(VFVPredictor):
         action: list[float],
         language_task: str,
         current_joints: list[float] | None = None,
+        scene_hints: list[str] | None = None,
     ) -> VFVResult:
-        del image, language_task  # reserved for VLM-based VFV
+        del image, language_task, scene_hints  # visual path is SemanticVFVPredictor
         if len(action) != self._cfg.dof:
             return VFVResult(hazard_score=1.0, triggered_ontology_ids=["PHY.JOINT_LIMIT"])
 
@@ -92,13 +100,20 @@ class ShadowSimPredictor(VFVPredictor):
         lower = np.array(self._cfg.joint_limit_lower, dtype=np.float64)
         upper = np.array(self._cfg.joint_limit_upper, dtype=np.float64)
         triggered: list[str] = []
+        trajectory: list[list[float]] = [list(map(float, q0))]
 
         for s in range(1, self._steps + 1):
             alpha = s / self._steps
             q = np.array(q0, dtype=np.float64) + alpha * self._dt * np.array(action, dtype=np.float64)
             q = np.clip(q, lower, upper)
+            trajectory.append(q.astype(float).tolist())
             if np.any(q <= lower + 1e-9) or np.any(q >= upper - 1e-9):
                 triggered.append("PHY.JOINT_LIMIT")
 
         hazard = 0.8 if "PHY.JOINT_LIMIT" in triggered else 0.0
-        return VFVResult(hazard_score=hazard, triggered_ontology_ids=sorted(set(triggered)))
+        return VFVResult(
+            hazard_score=hazard,
+            triggered_ontology_ids=sorted(set(triggered)),
+            trajectory=trajectory,
+            backend="shadow",
+        )

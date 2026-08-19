@@ -1,16 +1,12 @@
+import { decisionStyle } from "@/lib/decision";
+
 interface RiskGaugeProps {
   score: number;
   decision: string;
 }
 
 export default function RiskGauge({ score, decision }: RiskGaugeProps) {
-  const color =
-    decision === "BLOCK"
-      ? "text-danger"
-      : score > 0.5
-        ? "text-warning"
-        : "text-safe";
-
+  const style = decisionStyle(decision);
   const pct = Math.round(score * 100);
 
   return (
@@ -19,30 +15,18 @@ export default function RiskGauge({ score, decision }: RiskGaugeProps) {
         Risk Score
       </h2>
       <div className="flex items-end gap-3">
-        <span className={`text-5xl font-bold tabular-nums ${color}`}>
+        <span className={`text-5xl font-bold tabular-nums ${style.text}`}>
           {pct}
         </span>
         <span className="text-gray-400 text-sm mb-1">/ 100</span>
-        <span
-          className={`ml-auto px-3 py-1 rounded text-sm font-medium ${
-            decision === "BLOCK"
-              ? "bg-red-900/40 text-danger"
-              : "bg-green-900/40 text-safe"
-          }`}
-        >
+        <span className={`ml-auto px-3 py-1 rounded text-sm font-medium ${style.badge}`}>
           {decision}
         </span>
       </div>
       <div className="mt-3 h-2 bg-gray-700 rounded-full overflow-hidden">
         <div
-          className={`h-full rounded-full transition-all duration-200 ${
-            decision === "BLOCK"
-              ? "bg-danger"
-              : score > 0.5
-                ? "bg-warning"
-                : "bg-safe"
-          }`}
-          style={{ width: `${pct}%` }}
+          className={`h-full rounded-full transition-all duration-200 ${style.bar}`}
+          style={{ width: `${Math.max(pct, decision === "PASS" ? 0 : 4)}%` }}
         />
       </div>
     </div>

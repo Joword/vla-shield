@@ -19,14 +19,16 @@ documentation in lock-step.
 from __future__ import annotations
 
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
 import numpy as np
 
+from shield.api.kinematics import fk_skeleton, shadow_polyline, zones_for
 from shield.api.rule_engine import RuleRegistry
 from shield.vfv.predictor import ShadowSimPredictor, UrdfShadowConfig
+from shield.vfv.semantic import SemanticVFVPredictor
 
 try:
     import shield_ffi  # type: ignore[import-not-found]
@@ -45,6 +47,9 @@ class EvalInput:
     t_ns: int
     sequence_id: int
     current_joints: list[float]
+    language_task: str = ""
+    scene_hints: list[str] = field(default_factory=list)
+    image: np.ndarray | None = None
 
 
 def _coerce_joints(current_joints: list[float], dof: int) -> list[float]:
@@ -58,6 +63,23 @@ def _coerce_joints(current_joints: list[float], dof: int) -> list[float]:
     return list(current_joints) + [0.0] * (dof - len(current_joints))
 
 
+def _sem_template_kwargs(score: float) -> dict[str, Any]:
+    return {
+        "score": float(score),
+        "object_label": "scene_object",
+        "heat_label": "heat_source",
+        "distance": 0.10,
+        "region_name": "annotated_region",
+        "x": 0.0,
+        "y": 0.0,
+        "z": 0.0,
+        "electrical_label": "electrical_panel",
+        "perimeter_m": 0.5,
+        "ee_velocity": 0.40,
+        "velocity_threshold_ms": 0.3,
+    }
+
+
 class ShieldEvaluator:
     """Runtime evaluator facade used by the FastAPI endpoint."""
 
@@ -69,6 +91,7 @@ class ShieldEvaluator:
         self._dt = dt
         self._ffi_pipelines: dict[int, Any] = {}
         self._shadow_predictors: dict[int, ShadowSimPredictor] = {}
+        self._vfv = SemanticVFVPredictor()
         self._rules = rule_registry or RuleRegistry.load(ONTOLOGY_DIR)
 
     @property
@@ -155,12 +178,8 @@ class ShieldEvaluator:
                 )
                 reasons.append(("PHY.JOINT_LIMIT", detail, 1.0))
 
-        # Decision policy: any triggered reason → BLOCK on the hot path; the
-        # downstream arbiter (rule_engine + shadow prior) can downgrade to
-        # PASS-with-clamp later if every reason is non-blocking.
-        decision = "BLOCK" if reasons else "PASS"
         risk = max((r[2] for r in reasons), default=0.0)
-        return {"decision": decision, "reasons": reasons, "risk": risk}
+        return {"reasons": reasons, "risk": risk}
 
     def evaluate(self, req: EvalInput) -> dict[str, Any]:
         dof = len(req.action)
@@ -171,6 +190,9 @@ class ShieldEvaluator:
             t_ns=req.t_ns,
             sequence_id=req.sequence_id,
             current_joints=current,
+            language_task=req.language_task,
+            scene_hints=list(req.scene_hints),
+            image=req.image,
         )
 
         t0 = time.perf_counter()
@@ -181,10 +203,19 @@ class ShieldEvaluator:
         shadow = self._get_shadow_predictor(dof).predict(
             image=np.zeros((4, 4, 3), dtype=np.uint8),
             action=req.action,
-            language_task="runtime_eval",
+            language_task=req.language_task or "runtime_eval",
             current_joints=req.current_joints,
         )
         shadow_ms = (time.perf_counter() - t_shadow0) * 1000.0
+
+        vfv_image = req.image if req.image is not None else np.zeros((4, 4, 3), dtype=np.uint8)
+        vfv = self._vfv.predict(
+            image=vfv_image,
+            action=req.action,
+            language_task=req.language_task,
+            current_joints=req.current_joints,
+            scene_hints=req.scene_hints,
+        )
 
         # Main decision path
         ffi_pipeline = self._get_ffi_pipeline(dof)
@@ -214,13 +245,11 @@ class ShieldEvaluator:
             reasons = [
                 (str(oid), str(detail), float(score)) for oid, detail, score in raw_reasons
             ]
-            decision = str(ffi_decision.decision)
             risk = max((score for _, _, score in reasons), default=0.0)
             latency = dict(ffi_decision.latency())
             used_ffi = True
         else:
             py = self._python_fallback(req)
-            decision = py["decision"]
             reasons = py["reasons"]
             risk = py["risk"]
             latency = {
@@ -250,8 +279,27 @@ class ShieldEvaluator:
                     )
                     reasons.append((oid, detail, float(shadow.hazard_score)))
             if reasons:
-                decision = "BLOCK"
                 risk = max(risk, float(shadow.hazard_score))
+
+        existing_ids = {oid for oid, _, _ in reasons}
+        for oid in vfv.triggered_ontology_ids:
+            if oid in existing_ids:
+                continue
+            score = float(vfv.scores.get(oid, vfv.hazard_score) or 0.7)
+            detail = self._rules.render(
+                oid,
+                f"vfv: {oid} score={score:.2f}",
+                **_sem_template_kwargs(score),
+            )
+            reasons.append((oid, detail, score))
+            existing_ids.add(oid)
+        if vfv.hazard_score:
+            risk = max(risk, float(vfv.hazard_score))
+
+        ontology_ids = [oid for oid, _, _ in reasons]
+        decision = self._rules.decide(ontology_ids)
+        if reasons:
+            risk = max(risk, max(score for _, _, score in reasons))
 
         total_ms = (time.perf_counter() - t0) * 1000.0
         # Preserve FFI per-stage timings; only fill in shadow_ms (taken at API layer)
@@ -261,8 +309,14 @@ class ShieldEvaluator:
             latency["total_ms"] = float(total_ms)
         latency.setdefault("ingest_ms", float(ingest_ms))
 
-        ontology_ids = [oid for oid, _, _ in reasons]
         ontology_details = {oid: detail for oid, detail, _ in reasons if detail}
+
+        projected = [
+            float(j) + self._dt * float(a)
+            for j, a in zip(req.current_joints, req.action)
+        ]
+        skeleton = fk_skeleton(req.current_joints)
+        traj = shadow.trajectory or [list(req.current_joints), projected]
         return {
             "robot_id": req.robot_id,
             "sequence_id": req.sequence_id,
@@ -273,4 +327,12 @@ class ShieldEvaluator:
             "ontology_details": ontology_details,
             "latency": latency,
             "used_ffi": used_ffi,
+            "current_joints": [float(v) for v in req.current_joints],
+            "projected_joints": projected,
+            "skeleton": skeleton,
+            "shadow_path": shadow_polyline(traj),
+            "ee": skeleton[-1],
+            "zones": zones_for(ontology_ids),
+            "scene_rev": int(req.sequence_id),
+            "vfv_backend": vfv.backend,
         }

@@ -27,7 +27,7 @@
 - **📜 Executable safety ontology** — 13 ontology nodes (`PHY.*` × 7, `SEM.*` × 6) backed by JSON rule files (`dataset/ontology/rules_*.json`) carrying `trigger_condition`, typed `threshold`, `action ∈ {block, clamp, warn}`, `severity`, and a `{placeholder}`-driven `explanation_template`. The same JSON is the source of truth for the Rust arbiter, the FastAPI `/v1/rules` endpoint, and the React `RuleViewer`.
 - **🛡️ Hot + Async split** — hard, real-time checks live on the Rust hot path; expensive predictors (VLM-based VFV, multi-step shadow simulation) run asynchronously and feed the arbiter as **stale-safe** priors.
 - **🚀 Multi-tier acceleration** — Python → PyO3 (zero-copy from `numpy.ndarray`) → Rust → optional C++ host layer → CUDA kernel; every hop has one responsibility and the layer above transparently falls back when the layer below is unavailable.
-- **🎮 Per-pipeline CUDA context** — when GPU is enabled, `shield-cuda` holds cached device buffers, pinned host staging buffers, and a private CUDA stream per pipeline; **no `cudaMalloc` ever happens on the hot path**.
+- **🎮 Per-pipeline CUDA context** — when GPU is enabled, `shield-cuda` holds cached device buffers, pinned host staging buffers, and a private CUDA stream per pipeline; **no `cudaMalloc` ever happens on the hot path**. Vectors shorter than `min_gpu_n` (default 64) **never leave the CPU**, so 6–14 DoF arms skip kernel launch entirely.
 - **🔄 Always-on CPU fallback** — same C ABI on both backends, so the runtime keeps working on machines without `nvcc` (or with `CUDA_DISABLE=1`); a Python evaluator falls back further when even the Rust extension is missing.
 - **🗺️ Real-time 3D digital twin** — Next.js + React monitor renders live action, shadow trajectory, latency stacked bar, why-blocked panel, and active rule set, all driven by a Redis-Stream → WebSocket pipe.
 - **📦 Three deployment targets** — full server stack (Docker Compose), edge Jetson (ARM64 compose), and the bare-metal `cargo build --workspace` path. ROS 2 binding is feature-gated; the runtime can run completely outside a ROS environment.
@@ -58,9 +58,9 @@
    ║   │  (optional)  │   │ physics      │   │ urdf         │   │ collision    │    ║
    ║   │              │   │              │   │              │   │              │    ║
    ║   │ pre-clamp    │──▶│ kinematic    │──▶│ FK +         │──▶│ AABB broad   │──┐ ║
-   ║   │ ctx-cached   │   │ projector +  │   │ singularity  │   │ phase        │  │ ║
-   ║   │ pinned host  │   │ semantic     │   │ + forbidden  │   │ pre-check    │  │ ║
-   ║   │ + stream     │   │ constraints  │   │ zones        │   │              │  │ ║
+   ║   │ n<64 → CPU   │   │ projector +  │   │ singularity  │   │ phase        │  │ ║
+   ║   │ else GPU ctx │   │ semantic     │   │ + forbidden  │   │ pre-check    │  │ ║
+   ║   │ pinned+stream│   │ constraints  │   │ zones        │   │              │  │ ║
    ║   └──────────────┘   └──────────────┘   └──────────────┘   └──────────────┘  │ ║
    ║                                                                              │ ║
    ║                                ┌─────────────────────────────────────────────┘ ║
@@ -94,7 +94,8 @@
                                                           │  │ LatencyChart       │  │
                                                           │  │ WhyBlocked         │  │
                                                           │  │ RuleViewer         │  │
-                                                          │  │ SceneView (3D)     │  │
+                                                          │  │ SceneView skeleton │  │
+                                                          │  │ + shadow + zones   │  │
                                                           │  └────────────────────┘  │
                                                           └──────────────────────────┘
 
@@ -212,17 +213,24 @@ src/kernels/clamp_kernel.cu CUDA kernel + thin launcher
                             GPU
 ```
 
-| Mode | Trigger | Backend compiled |
+| Mode | Trigger | What runs |
 |---|---|---|
 | Real GPU | `nvcc` on PATH, default | `clamp_kernel.cu` + `cuda_host.cpp` (cudart linked) |
-| Forced CPU | `CUDA_DISABLE=1 cargo build` | `clamp_stub.cpp` |
+| Forced CPU stub | `CUDA_DISABLE=1 cargo build` | `clamp_stub.cpp` |
 | No CUDA toolkit | `nvcc` missing | `clamp_stub.cpp` |
+| Small-n bypass | `n < min_gpu_n` (default 64) | Rust scalar loop — **no C ABI, no kernel** |
+| Force backend | `SHIELD_CUDA_MIN_GPU_N=0` or `set_min_gpu_n(0)` | C ABI even for tiny `n` (A/B benches) |
 
 Run the built-in micro-benchmark:
 
 ```bash
 cd runtime
+# Typical arm DoF — CPU bypass should beat the GPU hop
 cargo run -p shield-cuda --example bench_clamp --release -- --iters 100000 --dof 8
+# Same DoF, force the C backend for the A/B number
+cargo run -p shield-cuda --example bench_clamp --release -- --iters 100000 --dof 8 --force-gpu
+# Wide vector — backend is allowed by default (n ≥ 64)
+cargo run -p shield-cuda --example bench_clamp --release -- --iters 20000 --dof 256
 ```
 
 ---
@@ -290,7 +298,7 @@ vla-shield/
 │       │   ├── RuleViewer.tsx               Live rule table fed by /v1/rules
 │       │   ├── WhyBlocked.tsx               Block reasons with trigger + explanation
 │       │   ├── RiskGauge.tsx
-│       │   └── SceneView.tsx                Three.js shadow trajectory
+│       │   └── SceneView.tsx                Three.js skeleton + shadow path + zones
 │       ├── hooks/                           WebSocket telemetry hook
 │       └── store/                           Zustand state
 │
@@ -327,72 +335,6 @@ vla-shield/
 
 ---
 
-## Changelog
-
-Each entry summarises **what changed** during that update — code only, no roadmap fluff.
-
-### v0.4 — Zero-copy FFI & runtime evaluator hardening
-
-- **`shield_ffi.evaluate_numpy`** — new PyO3 method that borrows `&[f32]` / `&[f64]` directly from contiguous `numpy.ndarray`, saving the Python-list → `Vec` conversion (~ 3–5 µs / call on 8-DoF). Shared core extracted into private `evaluate_impl`.
-- **Fixed hidden CUDA bug** — `PHY.VELOCITY_LIMIT` was silenced after CUDA pre-clamp because pre-detection read the already-clamped buffer. Refactor now keeps the unclamped input alive for detection.
-- **Backend evaluator** auto-detects `evaluate_numpy` and feeds `np.ascontiguousarray(...)`; transparently falls back to the list path or to the Python fallback when the extension is missing.
-- **`benchmark/bench_zero_copy.py`** — list vs numpy A/B with p50 / p95 / p99 and median speedup; `run_latency.py` gains `--no-numpy` for the same comparison through the HTTP / FFI path.
-- **Test count**: 16 → 17 (new `test_evaluate_numpy_zero_copy_path_matches_list_path`).
-
-### v0.3 — CUDA context: cached buffers, pinned host, persistent stream
-
-- **`ShieldCudaCtx`** — owns three cached device buffers, three `cudaMallocHost` pinned host staging buffers, and one private `cudaStream_t`; transparently grows when `n > capacity`.
-- **Two-tier C ABI** — `shield_cuda_clamp` (stateless one-shot) + `shield_cuda_ctx_{create,destroy,clamp}` (hot-path). CPU fallback (`clamp_stub.cpp`) implements **the same ABI**, so the Rust side never special-cases.
-- **Rust safe wrapper `CudaCtx`** — `clamp_into(input, limit, &mut output)` does zero allocations on the hot path; `Drop` releases device + pinned + stream.
-- **`shield-ffi` integration** — `PyShieldPipeline` constructs `Mutex<CudaCtx>` once per pipeline; **no `cudaMalloc` is ever called on the hot path**.
-- **6 integration tests** in `runtime/shield-cuda/tests/ctx.rs` + `cargo run -p shield-cuda --example bench_clamp` micro-bench.
-
-### v0.2 — CUDA host layer split (Rust → C → C++ → CUDA)
-
-- Split `clamp.cu` into **`clamp_kernel.cu`** (pure `__global__` kernel + thin launcher) and **`cuda_host.cpp`** (C++ host glue: `cudaMalloc / cudaMemcpyAsync / cudaFree` via RAII `DeviceBuffer`).
-- Fixed a real correctness bug: the previous one-file `clamp.cu` launched the kernel on raw **host pointers**, which is UB on real GPUs; the new host layer round-trips through device memory.
-- `build.rs` now compiles the kernel + host pair together when `nvcc` is found, links `cudart`, and supports `CUDA_DISABLE=1` to force the CPU fallback even on GPU machines.
-- `rustc-check-cfg(cfg(has_cuda_kernel))` to silence the Rust 1.80+ unknown-cfg warning.
-- Replaced 2024-edition `unsafe extern "C" { … }` syntax with 2021-compatible form so the workspace builds on the project's pinned edition.
-
-### v0.1.5 — `vlashield` → `shield` workspace-wide rename
-
-- Renamed every `vlashield-*` crate / folder / file / identifier (Rust crate names, Python package, Cargo deps, Docker compose env, OpenAPI spec, monitor package.json — 63 files touched, 12 directories renamed). Marketing string "VLA-Shield" preserved.
-- Python imports normalised to module top per PEP 8; deferred imports inside functions removed.
-
-### v0.1.4 — Plan-review fix pass (closing the loop)
-
-- **Executable rule engine** — new `backend/shield/api/rule_engine.py` loads `rules_*.json` into a `RuleRegistry`; the evaluator now uses rule-driven action (`block | clamp | warn`) and fills `{joint_name}` / `{requested}` / `{limit}` slots from runtime values.
-- **`/v1/evaluate` & `/v1/rules`** REST endpoints added; OpenAPI schema updated.
-- **Length-tolerant `current_joints`** — pad / truncate to match action length instead of crashing the FFI.
-- **Atomic Redis pipeline** (`SETEX + HSET + EXPIRE` in one transaction) replaces the per-call multi-round-trip; **MySQL pool** now closed in lifespan teardown.
-- **Backend evaluator preserves FFI per-stage latency**; only fills in `shadow_ms` and `total_ms`.
-- **Benchmark scenarios** now map scenario-id strings (`PHY-001`) to integer sequence-ids and pass `current_joints` through.
-- **API regression suite** — `test_evaluate_api.py` (FastAPI `TestClient` + fake-redis + aiomysql stub) covering `/v1/rules`, `/v1/evaluate` PASS / BLOCK, missing `current_joints`, empty action, rule-template rendering.
-
-### v0.1.3 — `shield-ffi` rule-driven pre-detection
-
-- Pre-detection loop in FFI explicitly emits `PHY.VELOCITY_LIMIT` and `PHY.JOINT_LIMIT` when raw input exceeds the limit, even though the projector silently clamps; projector errors are now routed to `FORBIDDEN_ZONE` / `JOINT_LIMIT` deterministically.
-
-### v0.1.2 — Hot/Async split + monitor enhancements
-
-- **`shield-shadow`** new Rust crate: `JointSpaceSimulator` runs multi-step roll-forward as an async risk prior; the `SafetyPipeline` invokes it stale-safely.
-- **`shield-physics::semantic`** — `SemanticConstraintMapper` maps `SEM.HEAT_SOURCE` / `FORBIDDEN_REGION` / `LIQUID_ELECTRICAL` to AABB exclusion zones and `SEM.HUMAN_PROXIMITY` to a velocity cap, consumed by `KinematicClampProjector`.
-- **`LatencyBreakdown`** expanded to 8 fields (`ingest_ms · urdf_fk_ms · physics_ms · collision_ms · tf2_ms · arbiter_ms · shadow_ms · total_ms`) end-to-end through Rust, OpenAPI, Pydantic, and the monitor's Zustand store.
-- **Monitor** — new `LatencyChart` (stacked bar + sparkline + budget marker), new `RuleViewer` (filter / expand, fed by `/v1/rules`), upgraded `WhyBlocked` (trigger condition + runtime-filled explanation).
-- **DB seed fix** — added `PHY.JOINT_LIMIT`, `PHY.SINGULARITY`, `PHY.FORBIDDEN_ZONE` nodes that were missing from `data.sql`.
-
-### v0.1.1 — Benchmark suite & scenario gold set
-
-- `benchmark/protocol.md` + `benchmark/run_latency.py` + `benchmark/run_safety.py` for HTTP and FFI paths.
-- `dataset/scenarios/scenarios.jsonl` — 22 gold scenarios covering all 13 ontology nodes (`PHY-*`, `SEM-*`, `COMBO-*`, `PASS-*`).
-
-### v0.1 — Initial scaffold
-
-- Six baseline Rust crates (`shield-core / urdf / physics / collision / ros2 / io`), FastAPI backend, Next.js monitor, MySQL + Redis I/O, Docker + edge compose, ontology JSON (13 nodes), red-team JSONL schema.
-
----
-
 ## Data
 
 **Manual samples** (`dataset/red_team/samples.jsonl`): bilingual (EN / ZH) entries for smoke testing.
@@ -419,8 +361,7 @@ python -m shield.data.validate --data ../dataset/red_team/public.jsonl
                   Vision-Language-Action Policies},
   author       = {The VLA-Shield Contributors},
   year         = {2026},
-  howpublished = {\url{https://github.com/your-org/vla-shield}},
-  note         = {Technical design v0.4}
+  howpublished = {\url{https://github.com/Joword/vla-shield}}
 }
 ```
 
