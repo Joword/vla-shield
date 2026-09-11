@@ -12,7 +12,7 @@
 //!      ▼
 //! Optional CUDA pre-clamp (small-n stays on CPU; see shield-cuda)
 //!      ▼
-//! Rust: KinematicClampProjector → AabbBroadPhase → inline arbiter
+//! Rust: KinematicClampProjector → URDF FK AABB broad-phase → inline arbiter
 //!      │
 //!      ▼
 //! PyDecision { decision: "PASS"|"BLOCK", reasons: [...], latency: {...} }
@@ -33,19 +33,21 @@ use convert::{make_joint_limits, vec_to_action, PyDecisionSummary};
 use numpy::{PyArrayMethods, PyReadonlyArray1};
 use pyo3::prelude::*;
 use pyo3::types::PyDict;
-use std::sync::Arc;
-#[cfg(feature = "cuda")]
-use std::sync::Mutex;
-use shield_collision::broad_phase::AabbBroadPhase;
-use shield_collision::{CollisionContext, CollisionPrechecker};
-use shield_core::arbiter::{ArbiterDecision, ArbiterReason, LatencyBreakdown, SemanticRiskReport};
-use shield_core::ontology::physical;
-use shield_core::scene::SceneGraph;
-use shield_core::types::{JointLimits, RunMode};
-use shield_physics::projection::KinematicClampProjector;
-use shield_physics::{PhysicalProjector, ProjectionContext};
+use std::sync::{Arc, Mutex};
 #[cfg(feature = "cuda")]
 use shield_cuda::CudaCtx;
+use shield_collision::broad_phase::AabbBroadPhase;
+use shield_collision::{CollisionContext, CollisionPrechecker};
+use shield_core::arbiter::{ArbiterDecision, ArbiterReason, LatencyBreakdown};
+use shield_core::ontology::physical;
+use shield_core::scene::{Primitive, SceneEntity, SceneGraph};
+use shield_core::types::{Aabb, JointLimits};
+use shield_physics::projection::KinematicClampProjector;
+use shield_physics::{PhysicalProjector, ProjectionContext};
+use shield_urdf::{AxisAlignedBox, UrdfKinematicChain, UrdfRobot};
+
+/// `(id, min_x, min_y, min_z, max_x, max_y, max_z, ontology_id)` as sent from Python.
+type Obstacle = (String, f64, f64, f64, f64, f64, f64, String);
 
 /// Python-visible decision result.
 #[pyclass(name = "Decision")]
@@ -63,7 +65,7 @@ pub struct PyDecision {
 #[pymethods]
 impl PyDecision {
     fn latency<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyDict>> {
-        let d = PyDict::new(py);
+        let d = PyDict::new_bound(py);
         d.set_item("ingest_ms", self.latency_raw.ingest_ms)?;
         d.set_item("urdf_fk_ms", self.latency_raw.urdf_fk_ms)?;
         d.set_item("physics_ms", self.latency_raw.physics_ms)?;
@@ -136,6 +138,8 @@ pub struct PyShieldPipeline {
     checker: AabbBroadPhase,
     dt: f64,
     collision_epsilon: f64,
+    urdf_chain: Option<UrdfKinematicChain>,
+    scene: Mutex<SceneState>,
     /// Per-pipeline CUDA context owning cached device buffers, pinned host
     /// staging buffers, and a private CUDA stream.  Held behind a `Mutex`
     /// because `clamp_into` mutates the cached buffers and PyO3 invokes
@@ -156,6 +160,11 @@ impl PyShieldPipeline {
         collision_epsilon = 0.02,
         acceleration_max = vec![],
         torque_max = vec![],
+        urdf_xml = None,
+        urdf_path = None,
+        root_link = None,
+        ee_link = None,
+        obstacles = vec![],
     ))]
     fn new(
         joint_names: Vec<String>,
@@ -166,6 +175,11 @@ impl PyShieldPipeline {
         collision_epsilon: f64,
         acceleration_max: Vec<f64>,
         torque_max: Vec<f64>,
+        urdf_xml: Option<String>,
+        urdf_path: Option<String>,
+        root_link: Option<String>,
+        ee_link: Option<String>,
+        obstacles: Vec<Obstacle>,
     ) -> PyResult<Self> {
         let limits = make_joint_limits(
             joint_names,
@@ -186,6 +200,9 @@ impl PyShieldPipeline {
                 ))
             })?,
         );
+        let urdf_chain = load_urdf_chain(urdf_xml, urdf_path, root_link, ee_link).map_err(|e| {
+            pyo3::exceptions::PyValueError::new_err(format!("URDF load failed: {e}"))
+        })?;
         Ok(PyShieldPipeline {
             limits: Arc::new(limits),
             #[cfg(feature = "cuda")]
@@ -194,6 +211,8 @@ impl PyShieldPipeline {
             checker: AabbBroadPhase,
             dt,
             collision_epsilon,
+            urdf_chain,
+            scene: Mutex::new(scene_state_from_obstacles(&obstacles)),
             #[cfg(feature = "cuda")]
             cuda_ctx,
         })
@@ -253,6 +272,30 @@ impl PyShieldPipeline {
             )
         })?;
         self.evaluate_impl(action_slice, current_slice, t_ns, sequence_id)
+    }
+
+    /// Replace scene obstacles. Each tuple is
+    /// ``(id, min_x, min_y, min_z, max_x, max_y, max_z, ontology_id)``.
+    /// ``PHY.FORBIDDEN_ZONE`` entries become end-effector zone checks;
+    /// any other ontology id becomes a collision body.
+    fn set_obstacles(&self, obstacles: Vec<Obstacle>) -> PyResult<()> {
+        let mut scene = self
+            .scene
+            .lock()
+            .map_err(|_| pyo3::exceptions::PyRuntimeError::new_err("scene lock poisoned"))?;
+        *scene = scene_state_from_obstacles(&obstacles);
+        Ok(())
+    }
+
+    /// Cartesian skeleton (root → EE) from the loaded URDF, or empty if none.
+    fn skeleton(&self, joints: Vec<f64>) -> PyResult<Vec<Vec<f64>>> {
+        let Some(chain) = &self.urdf_chain else {
+            return Ok(vec![]);
+        };
+        let pts = chain.skeleton(&joints).map_err(|e| {
+            pyo3::exceptions::PyValueError::new_err(e.to_string())
+        })?;
+        Ok(pts.into_iter().map(|p| p.to_vec()).collect())
     }
 
     fn __repr__(&self) -> String {
@@ -343,14 +386,17 @@ impl PyShieldPipeline {
         let av = vec_to_action(t_ns, sequence_id, action_clamped);
         let ingest_ms = t0.elapsed().as_secs_f64() * 1000.0;
 
-        let scene = SceneGraph::default();
+        let scene_guard = self.scene.lock().map_err(|_| {
+            pyo3::exceptions::PyRuntimeError::new_err("scene lock poisoned")
+        })?;
+        let scene = &scene_guard.scene;
         let proj_ctx = ProjectionContext {
             current_joints,
             limits: &self.limits,
-            scene: &scene,
+            scene,
             dt: self.dt,
-            urdf_chain: None,
-            forbidden_zones: &[],
+            urdf_chain: self.urdf_chain.as_ref(),
+            forbidden_zones: &scene_guard.forbidden,
             semantic_constraints: &[],
         };
 
@@ -358,14 +404,30 @@ impl PyShieldPipeline {
         let proposal = self.projector.project(&proj_ctx, &av);
         let physics_ms = physics_start.elapsed().as_secs_f64() * 1000.0;
 
+        // FK for the collision boxes runs once here so its cost is reported
+        // separately instead of hiding inside `collision_ms`.
+        let mut urdf_fk_ms = None;
+        let link_boxes = match (&proposal, self.urdf_chain.as_ref()) {
+            (Ok(p), Some(chain)) => {
+                let fk_start = Instant::now();
+                let boxes = chain.link_world_aabbs(&p.joint_positions).ok();
+                urdf_fk_ms = Some(fk_start.elapsed().as_secs_f64() * 1000.0);
+                boxes
+            }
+            _ => None,
+        };
+
         let collision_start = Instant::now();
         let collision_report = match &proposal {
             Ok(p) => {
-                let ctx = CollisionContext {
-                    scene: &scene,
-                    limits: &self.limits,
-                    epsilon: self.collision_epsilon,
-                };
+                let mut ctx =
+                    CollisionContext::new(scene, &self.limits, self.collision_epsilon);
+                if let Some(chain) = self.urdf_chain.as_ref() {
+                    ctx = ctx.with_urdf(chain);
+                }
+                if let Some(boxes) = link_boxes.as_deref() {
+                    ctx = ctx.with_link_aabbs(boxes);
+                }
                 self.checker.precheck(&ctx, p)
             }
             Err(_) => shield_core::arbiter::CollisionReport {
@@ -408,7 +470,7 @@ impl PyShieldPipeline {
         let total_ms = t0.elapsed().as_secs_f64() * 1000.0;
         let latency = LatencyBreakdown {
             ingest_ms,
-            urdf_fk_ms: None,
+            urdf_fk_ms,
             physics_ms,
             collision_ms,
             tf2_ms: None,
@@ -437,6 +499,86 @@ impl PyShieldPipeline {
         let summary = PyDecisionSummary::from(decision);
         Ok(PyDecision::from(summary))
     }
+}
+
+/// Obstacles split by ontology: `PHY.FORBIDDEN_ZONE` boxes are end-effector
+/// point checks in the projector, everything else is a collision body.
+/// Keeping both in one lock keeps the two views consistent per evaluation.
+struct SceneState {
+    scene: SceneGraph,
+    forbidden: Vec<AxisAlignedBox>,
+}
+
+const FORBIDDEN_ZONE_ID: &str = "PHY.FORBIDDEN_ZONE";
+
+fn scene_state_from_obstacles(items: &[Obstacle]) -> SceneState {
+    let mut entities = Vec::new();
+    let mut forbidden = Vec::new();
+    for (id, x0, y0, z0, x1, y1, z1, ontology_id) in items {
+        let aabb = Aabb::new([*x0, *y0, *z0], [*x1, *y1, *z1]);
+        if ontology_id == FORBIDDEN_ZONE_ID {
+            forbidden.push(AxisAlignedBox {
+                min: aabb.min,
+                max: aabb.max,
+            });
+            continue;
+        }
+        let c = aabb.center();
+        let h = aabb.half_extents();
+        entities.push(SceneEntity {
+            id: id.clone(),
+            primitive: Primitive::Box {
+                extents: [h.x * 2.0, h.y * 2.0, h.z * 2.0],
+            },
+            pose: [c.x, c.y, c.z, 0.0, 0.0, 0.0, 1.0],
+            aabb,
+            tags: vec![],
+        });
+    }
+    SceneState {
+        scene: SceneGraph {
+            frame_id: "base_link".into(),
+            revision: 1,
+            entities,
+        },
+        forbidden,
+    }
+}
+
+fn load_urdf_chain(
+    urdf_xml: Option<String>,
+    urdf_path: Option<String>,
+    root_link: Option<String>,
+    ee_link: Option<String>,
+) -> Result<Option<UrdfKinematicChain>, String> {
+    let robot = if let Some(xml) = urdf_xml.filter(|s| !s.trim().is_empty()) {
+        UrdfRobot::from_str(&xml).map_err(|e| e.to_string())?
+    } else if let Some(path) = urdf_path.filter(|s| !s.trim().is_empty()) {
+        UrdfRobot::from_file(&path).map_err(|e| e.to_string())?
+    } else {
+        return Ok(None);
+    };
+    let root = root_link.unwrap_or_else(|| robot.root_link.clone());
+    let ee = match ee_link.filter(|s| !s.is_empty()) {
+        Some(e) => e,
+        None => leaf_link(&robot).ok_or_else(|| "URDF has no leaf link".to_string())?,
+    };
+    UrdfKinematicChain::from_robot(&robot, &root, &ee)
+        .map(Some)
+        .map_err(|e| e.to_string())
+}
+
+fn leaf_link(robot: &UrdfRobot) -> Option<String> {
+    let parents: std::collections::HashSet<&str> =
+        robot.joints.values().map(|j| j.parent.as_str()).collect();
+    let mut leaves: Vec<String> = robot
+        .joints
+        .values()
+        .map(|j| j.child.clone())
+        .filter(|c| !parents.contains(c.as_str()))
+        .collect();
+    leaves.sort();
+    leaves.into_iter().next()
 }
 
 /// Register the module with Python.
