@@ -22,6 +22,7 @@ from typing import Callable, Iterable
 import numpy as np
 
 from shield.vfv.clip_backend import try_load_clip
+from shield.vfv.image_cues import image_cue_scores
 from shield.vfv.predictor import VFVPredictor, VFVResult
 
 # Phrase lists are matched against *hints*, not against the short task field
@@ -89,6 +90,11 @@ class SemanticVFVPredictor(VFVPredictor):
                     scores[oid] = max(scores.get(oid, 0.0), float(val))
                     clip_used = True
 
+        cue_used = False
+        for oid, val in image_cue_scores(image).items():
+            scores[oid] = max(scores.get(oid, 0.0), float(val))
+            cue_used = True
+
         # Human proximity: only warn-level unless EE command is aggressive.
         # The rule itself is `warn`; leave scoring to the registry.
         if "SEM.HUMAN_PROXIMITY" in scores and action:
@@ -102,5 +108,5 @@ class SemanticVFVPredictor(VFVPredictor):
             hazard_score=hazard,
             triggered_ontology_ids=triggered,
             scores=dict(scores),
-            backend="clip" if clip_used else "hints",
+            backend="clip" if clip_used else ("image" if cue_used else "hints"),
         )
