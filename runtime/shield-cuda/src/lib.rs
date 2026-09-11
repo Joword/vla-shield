@@ -46,6 +46,16 @@ extern "C" {
         output: *mut f32,
         n: usize,
     ) -> i32;
+
+    fn shield_cuda_aabb_hits(
+        link_min: *const f32,
+        link_max: *const f32,
+        n_links: usize,
+        obs_min: *const f32,
+        obs_max: *const f32,
+        n_obs: usize,
+        hits: *mut u8,
+    ) -> i32;
 }
 
 #[derive(Debug, Error)]
@@ -276,6 +286,55 @@ pub fn is_cuda_kernel_enabled() -> bool {
     cfg!(has_cuda_kernel)
 }
 
+/// Packed AABB: `[min_x, min_y, min_z]` / `[max_x, max_y, max_z]` per box.
+///
+/// `hits[i] = 1` if link box `i` overlaps any obstacle.  Typical VLA scenes
+/// are a handful of links × a handful of obstacles, so this is a host loop
+/// on both the CUDA and CPU backends (same C ABI).
+pub fn aabb_hits(
+    link_min: &[[f32; 3]],
+    link_max: &[[f32; 3]],
+    obs_min: &[[f32; 3]],
+    obs_max: &[[f32; 3]],
+    hits: &mut [u8],
+) -> Result<(), CudaError> {
+    if link_min.len() != link_max.len() {
+        return Err(CudaError::DimensionMismatch {
+            input: link_min.len(),
+            limit: link_max.len(),
+        });
+    }
+    if obs_min.len() != obs_max.len() {
+        return Err(CudaError::DimensionMismatch {
+            input: obs_min.len(),
+            limit: obs_max.len(),
+        });
+    }
+    if hits.len() < link_min.len() {
+        return Err(CudaError::OutputTooSmall {
+            need: link_min.len(),
+            got: hits.len(),
+        });
+    }
+    let n = link_min.len();
+    let m = obs_min.len();
+    let code = unsafe {
+        shield_cuda_aabb_hits(
+            link_min.as_ptr() as *const f32,
+            link_max.as_ptr() as *const f32,
+            n,
+            obs_min.as_ptr() as *const f32,
+            obs_max.as_ptr() as *const f32,
+            m,
+            hits.as_mut_ptr(),
+        )
+    };
+    if code != 0 {
+        return Err(CudaError::Backend(code));
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -393,5 +452,21 @@ mod tests {
         let mut out = vec![0.0_f32; 3];
         let err = ctx.clamp_into(&[1.0, 2.0], &[1.0], &mut out).unwrap_err();
         assert!(matches!(err, CudaError::DimensionMismatch { .. }));
+    }
+
+    #[test]
+    fn aabb_hits_detects_overlap() {
+        let link_min = [[0.0_f32, 0.0, 0.0]];
+        let link_max = [[1.0_f32, 1.0, 1.0]];
+        let obs_min = [[0.5_f32, 0.5, 0.5]];
+        let obs_max = [[1.5_f32, 1.5, 1.5]];
+        let mut hits = [0u8; 1];
+        aabb_hits(&link_min, &link_max, &obs_min, &obs_max, &mut hits).unwrap();
+        assert_eq!(hits[0], 1);
+
+        let miss_min = [[2.0_f32, 2.0, 2.0]];
+        let miss_max = [[3.0_f32, 3.0, 3.0]];
+        aabb_hits(&link_min, &link_max, &miss_min, &miss_max, &mut hits).unwrap();
+        assert_eq!(hits[0], 0);
     }
 }

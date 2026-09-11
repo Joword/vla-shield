@@ -26,7 +26,7 @@ impl RedisClient {
     ) -> Result<(), redis::RedisError> {
         let mut conn = self.connection().await?;
         let key = format!("risk:{robot_id}");
-        conn.set_ex(&key, score.to_string(), 1).await?;
+        conn.set_ex::<_, _, ()>(&key, score.to_string(), 1).await?;
         Ok(())
     }
 
