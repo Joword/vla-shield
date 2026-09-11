@@ -248,14 +248,3 @@ python -m shield.data.validate --data ../dataset/red_team/public.jsonl
 }
 ```
 
----
-
-## Contributors
-
-- [Joword](https://github.com/Joword)
-
----
-
-## License
-
-Licensed under **Apache License 2.0**. See [LICENSE](LICENSE) for details.
