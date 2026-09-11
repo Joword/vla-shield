@@ -1,6 +1,9 @@
 //! Forward kinematics and a simple positional manipulability measure.
 
+use std::collections::HashMap;
+
 use nalgebra::{Isometry3, Rotation3, Translation3, Unit, UnitQuaternion, Vector3};
+use shield_core::types::Aabb;
 
 use crate::error::UrdfError;
 use crate::urdf_loader::{JointSpec, UrdfRobot};
@@ -9,17 +12,78 @@ use crate::urdf_loader::{JointSpec, UrdfRobot};
 #[derive(Debug, Clone)]
 pub struct UrdfKinematicChain {
     joints: Vec<JointSpec>,
+    /// Link-frame AABBs keyed by link name (root + every child on the chain).
+    link_aabbs: HashMap<String, Aabb>,
 }
 
 impl UrdfKinematicChain {
     /// Build chain from a parsed robot.
     pub fn from_robot(robot: &UrdfRobot, root_link: &str, ee_link: &str) -> Result<Self, UrdfError> {
         let joints = robot.chain_to(root_link, ee_link)?;
-        Ok(Self { joints })
+        Ok(Self {
+            joints,
+            link_aabbs: robot.link_aabbs.clone(),
+        })
     }
 
     pub fn dof(&self) -> usize {
         self.joints.len()
+    }
+
+    pub fn joints(&self) -> &[JointSpec] {
+        &self.joints
+    }
+
+    pub fn root_link(&self) -> Option<&str> {
+        self.joints.first().map(|j| j.parent.as_str())
+    }
+
+    pub fn ee_link(&self) -> Option<&str> {
+        self.joints.last().map(|j| j.child.as_str())
+    }
+
+    /// Link frames from root (identity) through each joint child, in chain order.
+    pub fn link_frames(&self, q: &[f64]) -> Result<Vec<(String, Isometry3<f64>)>, UrdfError> {
+        if q.len() != self.dof() {
+            return Err(UrdfError::DimensionMismatch {
+                expected: self.dof(),
+                got: q.len(),
+            });
+        }
+        let mut frames = Vec::with_capacity(self.joints.len() + 1);
+        let mut world = Isometry3::identity();
+        if let Some(root) = self.root_link() {
+            frames.push((root.to_string(), world));
+        }
+        for (i, j) in self.joints.iter().enumerate() {
+            world *= joint_transform(j, q[i]);
+            frames.push((j.child.clone(), world));
+        }
+        Ok(frames)
+    }
+
+    /// Cartesian waypoints `[root, j1_child, …, ee]` in the root frame.
+    pub fn skeleton(&self, q: &[f64]) -> Result<Vec<[f64; 3]>, UrdfError> {
+        Ok(self
+            .link_frames(q)?
+            .into_iter()
+            .map(|(_, iso)| {
+                let t = iso.translation.vector;
+                [t.x, t.y, t.z]
+            })
+            .collect())
+    }
+
+    /// World-frame AABBs for every link that has geometry.
+    pub fn link_world_aabbs(&self, q: &[f64]) -> Result<Vec<(String, Aabb)>, UrdfError> {
+        let frames = self.link_frames(q)?;
+        let mut out = Vec::with_capacity(frames.len());
+        for (name, iso) in frames {
+            if let Some(local) = self.link_aabbs.get(&name) {
+                out.push((name, local.transformed(&iso)));
+            }
+        }
+        Ok(out)
     }
 
     /// End-effector isometry in the root link frame (same convention as ROS chain product).
@@ -154,5 +218,26 @@ mod tests {
             UrdfKinematicChain::from_robot(&robot, "panda_link0", "panda_hand").expect("chain");
         assert_eq!(chain.dof(), 6);
         let _ = chain.ee_position(&[0.0; 6]).unwrap();
+        let skel = chain.skeleton(&[0.0; 6]).unwrap();
+        assert_eq!(skel.len(), 7);
+        let aabbs = chain.link_world_aabbs(&[0.0; 6]).unwrap();
+        assert!(!aabbs.is_empty());
+    }
+
+    #[test]
+    fn ur5_link_aabbs_move_with_q() {
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../dataset/urdf/ur5_simple.urdf");
+        let robot = UrdfRobot::from_file(&path).expect("ur5");
+        let chain =
+            UrdfKinematicChain::from_robot(&robot, "base_link", "wrist_3_link").expect("chain");
+        let z = chain.link_world_aabbs(&[0.0; 6]).unwrap();
+        let spun = chain.link_world_aabbs(&[1.57, 0.0, 0.0, 0.0, 0.0, 0.0]).unwrap();
+        assert_eq!(z.len(), spun.len());
+        let ee_z = z.last().unwrap().1.center();
+        let ee_s = spun.last().unwrap().1.center();
+        let dx = (ee_z.x - ee_s.x).abs();
+        let dy = (ee_z.y - ee_s.y).abs();
+        assert!(dx + dy > 0.05, "yaw should move the distal AABB");
     }
 }

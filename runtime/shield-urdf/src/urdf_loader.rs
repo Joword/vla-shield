@@ -7,7 +7,10 @@ use std::path::Path;
 use quick_xml::events::Event;
 use quick_xml::Reader;
 
+use shield_core::types::Aabb;
+
 use crate::error::UrdfError;
+use crate::geom::{merge_geoms, parse_link_aabbs};
 
 /// One revolute joint along the kinematic chain (parent link -> child link).
 #[derive(Debug, Clone)]
@@ -30,6 +33,8 @@ pub struct UrdfRobot {
     pub name: String,
     pub joints: HashMap<String, JointSpec>,
     pub root_link: String,
+    /// Conservative AABB of each link in that link's frame.
+    pub link_aabbs: HashMap<String, Aabb>,
 }
 
 impl UrdfRobot {
@@ -298,11 +303,14 @@ fn parse_urdf(xml: &str) -> Result<UrdfRobot, UrdfError> {
 
     let name = robot_name.unwrap_or_else(|| "robot".to_string());
     let root_link = find_root_link(&joints)?;
+    let parsed_geoms = parse_link_aabbs(xml)?;
+    let link_aabbs = merge_geoms(parsed_geoms, &joints);
 
     Ok(UrdfRobot {
         name,
         joints,
         root_link,
+        link_aabbs,
     })
 }
 

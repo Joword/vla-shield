@@ -1,4 +1,4 @@
-use nalgebra::{Isometry3, Vector3};
+use nalgebra::{Isometry3, Point3, Vector3};
 use serde::{Deserialize, Serialize};
 
 /// 6-DOF pose (position + unit quaternion).
@@ -47,6 +47,72 @@ impl Aabb {
             && self.max[1] >= other.min[1]
             && self.min[2] <= other.max[2]
             && self.max[2] >= other.min[2]
+    }
+
+    /// Tight AABB of an iterator of points. Empty iterator → `None`.
+    pub fn from_points(pts: impl IntoIterator<Item = [f64; 3]>) -> Option<Self> {
+        let mut iter = pts.into_iter();
+        let first = iter.next()?;
+        let mut min = first;
+        let mut max = first;
+        for p in iter {
+            for i in 0..3 {
+                min[i] = min[i].min(p[i]);
+                max[i] = max[i].max(p[i]);
+            }
+        }
+        Some(Self { min, max })
+    }
+
+    /// Conservative world AABB of this box after a rigid transform.
+    pub fn transformed(&self, iso: &Isometry3<f64>) -> Self {
+        let corners = [
+            [self.min[0], self.min[1], self.min[2]],
+            [self.min[0], self.min[1], self.max[2]],
+            [self.min[0], self.max[1], self.min[2]],
+            [self.min[0], self.max[1], self.max[2]],
+            [self.max[0], self.min[1], self.min[2]],
+            [self.max[0], self.min[1], self.max[2]],
+            [self.max[0], self.max[1], self.min[2]],
+            [self.max[0], self.max[1], self.max[2]],
+        ];
+        let pts = corners.map(|c| {
+            let p = iso * Point3::new(c[0], c[1], c[2]);
+            [p.x, p.y, p.z]
+        });
+        Self::from_points(pts).expect("8 corners")
+    }
+
+    /// Union of two AABBs.
+    pub fn union(&self, other: &Aabb) -> Self {
+        Self {
+            min: [
+                self.min[0].min(other.min[0]),
+                self.min[1].min(other.min[1]),
+                self.min[2].min(other.min[2]),
+            ],
+            max: [
+                self.max[0].max(other.max[0]),
+                self.max[1].max(other.max[1]),
+                self.max[2].max(other.max[2]),
+            ],
+        }
+    }
+
+    /// Box covering the segment from the origin to `xyz`, inflated by `radius`.
+    pub fn along_segment(xyz: [f64; 3], radius: f64) -> Self {
+        Self {
+            min: [
+                xyz[0].min(0.0) - radius,
+                xyz[1].min(0.0) - radius,
+                xyz[2].min(0.0) - radius,
+            ],
+            max: [
+                xyz[0].max(0.0) + radius,
+                xyz[1].max(0.0) + radius,
+                xyz[2].max(0.0) + radius,
+            ],
+        }
     }
 }
 
@@ -100,5 +166,16 @@ mod tests {
         let inflated = a.inflated(0.1);
         assert!((inflated.min[0] - (-0.1)).abs() < 1e-9);
         assert!((inflated.max[0] - 1.1).abs() < 1e-9);
+    }
+
+    #[test]
+    fn aabb_transform_rotates_corners() {
+        let a = Aabb::new([-0.1, -0.1, -0.1], [0.1, 0.1, 0.1]);
+        let iso = Isometry3::from_parts(
+            nalgebra::Translation3::new(1.0, 0.0, 0.0),
+            nalgebra::UnitQuaternion::identity(),
+        );
+        let w = a.transformed(&iso);
+        assert!((w.center().x - 1.0).abs() < 1e-9);
     }
 }

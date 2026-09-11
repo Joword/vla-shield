@@ -6,6 +6,7 @@ license.workspace = true
 description = "URDF parsing, forward kinematics, and forbidden-zone checks for VLA-Shield"
 
 [dependencies]
+shield-core = { workspace = true }
 nalgebra = { workspace = true }
 thiserror = { workspace = true }
 quick-xml = { workspace = true }
