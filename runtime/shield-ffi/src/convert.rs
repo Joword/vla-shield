@@ -1,18 +1,12 @@
-//! Conversions between Python-facing types and shield-core Rust types.
+//! Python lists ↔ shield-core types.
 
 use shield_core::action::ActionVector;
 use shield_core::arbiter::{ArbiterDecision, LatencyBreakdown};
 use shield_core::types::JointLimits;
 
-/// Build a `JointLimits` from flat Python lists.
+/// `JointLimits` from flat Python lists.
 ///
-/// # Arguments
-/// * `names`           - Joint name strings.
-/// * `position_min`    - Lower position limits (rad).
-/// * `position_max`    - Upper position limits (rad).
-/// * `velocity_max`    - Velocity caps (rad/s).
-/// * `acceleration_max`- Acceleration caps (rad/s²); uses 10× velocity if empty.
-/// * `torque_max`      - Torque caps (Nm); uses 50 Nm per joint if empty.
+/// Empty `acceleration_max` → 10× velocity. Empty `torque_max` → 50 Nm each.
 pub fn make_joint_limits(
     names: Vec<String>,
     position_min: Vec<f64>,
@@ -42,7 +36,7 @@ pub fn make_joint_limits(
     }
 }
 
-/// Summarise an `ArbiterDecision` into a Python-friendly dict-like structure.
+/// Flatten an `ArbiterDecision` into something Python can swallow.
 pub struct PyDecisionSummary {
     pub decision: &'static str,
     pub reasons: Vec<(String, String, f32)>,
@@ -74,7 +68,7 @@ impl From<ArbiterDecision> for PyDecisionSummary {
     }
 }
 
-/// Convert a raw Python `list[float]` action into an `ActionVector`.
+/// Python `list[float]` → `ActionVector`.
 pub fn vec_to_action(t_ns: u64, sequence_id: u64, data: Vec<f32>) -> ActionVector {
     ActionVector::new(t_ns, sequence_id, data)
 }

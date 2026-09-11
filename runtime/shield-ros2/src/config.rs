@@ -2,19 +2,18 @@ use shield_core::ontology::Severity;
 use shield_core::types::RunMode;
 use serde::{Deserialize, Serialize};
 
-/// Top-level runtime configuration.
+/// Knobs for the runtime. Defaults are "a robot on localhost".
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RuntimeConfig {
     pub robot_id: String,
     pub mode: RunMode,
-    /// Minimum severity to trigger a hard block (inclusive).
+    /// Min severity that triggers a hard block (inclusive).
     pub block_threshold: Severity,
-    /// Maximum allowed age (ms) for a semantic risk report before it is
-    /// considered stale and the arbiter falls back to physics-only mode.
+    /// Semantic report older than this (ms) is stale → physics-only.
     pub semantic_staleness_ms: u64,
-    /// Conservative inflation factor for AABB collision checks.
+    /// AABB inflation. Conservative on purpose.
     pub collision_epsilon: f64,
-    /// Control loop period (seconds).
+    /// Control-loop period (seconds).
     pub dt: f64,
     pub mysql_url: String,
     pub redis_url: String,

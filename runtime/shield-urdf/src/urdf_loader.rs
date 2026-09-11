@@ -1,4 +1,5 @@
-//! Minimal URDF loader: revolute joints and link connectivity for serial chains.
+//! Tiny URDF loader: revolute joints + who connects to whom. Fixed joints
+//! get skipped when we walk the chain.
 
 use std::collections::HashMap;
 use std::fs;
@@ -12,44 +13,44 @@ use shield_core::types::Aabb;
 use crate::error::UrdfError;
 use crate::geom::{merge_geoms, parse_link_aabbs};
 
-/// One revolute joint along the kinematic chain (parent link -> child link).
+/// One revolute joint (parent link → child link).
 #[derive(Debug, Clone)]
 pub struct JointSpec {
     pub name: String,
     pub parent: String,
     pub child: String,
-    /// Fixed transform from parent link frame to joint frame at q = 0 (xyz meters, rpy radians).
+    /// Parent → joint frame at q = 0. xyz meters, rpy radians.
     pub origin_xyz: [f64; 3],
     pub origin_rpy: [f64; 3],
-    /// Joint axis in joint frame (normalized).
+    /// Axis in the joint frame (normalized).
     pub axis: [f64; 3],
     pub limit_lower: f64,
     pub limit_upper: f64,
 }
 
-/// Parsed robot with named joints (revolute only; fixed joints are skipped in chain build).
+/// Parsed robot. Revolute only in the chain; fixed joints are skipped.
 #[derive(Debug, Clone)]
 pub struct UrdfRobot {
     pub name: String,
     pub joints: HashMap<String, JointSpec>,
     pub root_link: String,
-    /// Conservative AABB of each link in that link's frame.
+    /// Conservative AABB of each link, in that link's frame.
     pub link_aabbs: HashMap<String, Aabb>,
 }
 
 impl UrdfRobot {
-    /// Load URDF from disk.
+    /// Load from disk.
     pub fn from_file(path: impl AsRef<Path>) -> Result<Self, UrdfError> {
         let text = fs::read_to_string(path.as_ref())?;
         Self::from_str(&text)
     }
 
-    /// Parse URDF XML string.
+    /// Parse the XML string.
     pub fn from_str(xml: &str) -> Result<Self, UrdfError> {
         parse_urdf(xml)
     }
 
-    /// Build an ordered kinematic chain from `root_link` to `ee_link` using only revolute joints.
+    /// Ordered revolute chain `root_link` → `ee_link`.
     pub fn chain_to(&self, root_link: &str, ee_link: &str) -> Result<Vec<JointSpec>, UrdfError> {
         chain_between(&self.joints, root_link, ee_link)
     }
@@ -347,7 +348,7 @@ fn find_root_link(joints: &HashMap<String, JointSpec>) -> Result<String, UrdfErr
     Ok(roots[0].to_string())
 }
 
-/// Walk from ee backward to root; reverse to base -> tip.
+/// Walk EE → root, then reverse so we get base → tip.
 fn chain_between(
     joints: &HashMap<String, JointSpec>,
     root: &str,

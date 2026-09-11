@@ -12,7 +12,7 @@ const STAGES: { key: keyof LatencyBreakdown; label: string; color: string }[] = 
   { key: "shadow_ms",   label: "Shadow",    color: "#a78bfa" },
 ];
 
-const BUDGET_MS = 5.0;
+const BUDGET_MS = 5.0; // hot-path budget; sparkline dashed line uses this too
 
 function Segment({
   value,
@@ -66,7 +66,7 @@ export default function LatencyChart() {
         Latency Breakdown
       </h2>
 
-      {/* Stacked bar */}
+      {/* Stages stacked by share of total_ms. Segment hides anything under 0.5%. */}
       <div className="flex h-6 w-full rounded overflow-hidden mb-2">
         {STAGES.map(({ key, label, color }) => {
           const raw = latency[key];
@@ -83,7 +83,7 @@ export default function LatencyChart() {
         })}
       </div>
 
-      {/* Total + budget indicator */}
+      {/* 5ms budget. We go red if we blow it. */}
       <div className="flex items-center justify-between text-xs mb-3">
         <span className={`font-mono font-semibold ${overBudget ? "text-danger" : "text-success"}`}>
           {total.toFixed(2)} ms total
@@ -94,7 +94,7 @@ export default function LatencyChart() {
         </span>
       </div>
 
-      {/* Per-stage table */}
+      {/* Same stages as the bar, with the actual ms. */}
       <table className="w-full text-xs text-gray-400">
         <tbody>
           {STAGES.map(({ key, label, color }) => {
@@ -118,7 +118,7 @@ export default function LatencyChart() {
         </tbody>
       </table>
 
-      {/* Mini latency sparkline (last N samples) */}
+      {/* Last ~60 totals. Dashed line is the 5ms budget. */}
       {latencyHistory.length > 1 && (
         <div className="mt-3">
           <p className="text-xs text-gray-500 mb-1">Recent total_ms</p>

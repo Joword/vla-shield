@@ -1,10 +1,10 @@
 use nalgebra::{Isometry3, Point3, Vector3};
 use serde::{Deserialize, Serialize};
 
-/// 6-DOF pose (position + unit quaternion).
+/// Pose: xyz + unit quaternion.
 pub type Pose = Isometry3<f64>;
 
-/// Axis-Aligned Bounding Box for broad-phase collision.
+/// Axis-aligned box. Broad-phase lives on these.
 #[derive(Debug, Clone, Copy, Serialize, Deserialize)]
 pub struct Aabb {
     pub min: [f64; 3],
@@ -32,7 +32,7 @@ impl Aabb {
         )
     }
 
-    /// Inflate the AABB by `eps` in all directions (conservative margin).
+    /// Grow by `eps` on every side. Conservative on purpose.
     pub fn inflated(&self, eps: f64) -> Self {
         Self {
             min: [self.min[0] - eps, self.min[1] - eps, self.min[2] - eps],
@@ -49,7 +49,7 @@ impl Aabb {
             && self.max[2] >= other.min[2]
     }
 
-    /// Tight AABB of an iterator of points. Empty iterator → `None`.
+    /// Tight box around points. Empty iterator → `None`.
     pub fn from_points(pts: impl IntoIterator<Item = [f64; 3]>) -> Option<Self> {
         let mut iter = pts.into_iter();
         let first = iter.next()?;
@@ -64,7 +64,7 @@ impl Aabb {
         Some(Self { min, max })
     }
 
-    /// Conservative world AABB of this box after a rigid transform.
+    /// World AABB after a rigid transform. Corners only — a bit fat after rotation.
     pub fn transformed(&self, iso: &Isometry3<f64>) -> Self {
         let corners = [
             [self.min[0], self.min[1], self.min[2]],
@@ -83,7 +83,7 @@ impl Aabb {
         Self::from_points(pts).expect("8 corners")
     }
 
-    /// Union of two AABBs.
+    /// Smallest box that covers both.
     pub fn union(&self, other: &Aabb) -> Self {
         Self {
             min: [
@@ -99,7 +99,7 @@ impl Aabb {
         }
     }
 
-    /// Box covering the segment from the origin to `xyz`, inflated by `radius`.
+    /// Capsule-ish box from origin to `xyz`, padded by `radius`.
     pub fn along_segment(xyz: [f64; 3], radius: f64) -> Self {
         Self {
             min: [
@@ -116,7 +116,7 @@ impl Aabb {
     }
 }
 
-/// Per-joint kinematic limits.
+/// Per-joint limits from the URDF (or whoever filled them in).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct JointLimits {
     pub names: Vec<String>,
@@ -127,17 +127,17 @@ pub struct JointLimits {
     pub torque_max: Vec<f64>,
 }
 
-/// Operating mode of the safety runtime.
+/// How hard we enforce. `Disabled` is an escape hatch — you have to opt in.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum RunMode {
-    /// Full checking pipeline (physics + collision + semantic).
+    /// Physics + collision + semantic. The real thing.
     Production,
-    /// Physics + collision only; VLM/LLM skipped.
+    /// Skip VLM/LLM. Physics + collision only.
     PhysicsOnly,
-    /// Log violations but never block (for data collection).
+    /// Log it, never block. For data collection.
     Monitor,
-    /// All checks disabled (escape hatch, requires explicit opt-in).
+    /// Everything off. Explicit opt-in, don't leave this on.
     Disabled,
 }
 

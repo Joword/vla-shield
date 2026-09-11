@@ -1,4 +1,4 @@
-//! URDF parsing, forward kinematics, and Cartesian forbidden zones for VLA-Shield.
+//! URDF parse, FK, and Cartesian no-go boxes. That's the whole crate.
 
 pub mod error;
 pub mod forbidden_zone;

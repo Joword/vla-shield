@@ -1,1 +1,1 @@
-"""Evaluation utilities for red-team benchmarking and safety metrics."""
+"""Red-team metrics — precision / recall / FPR on BLOCK vs PASS."""

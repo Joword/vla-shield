@@ -1,8 +1,8 @@
-"""Physical checks that mirror ``shield-physics::checks``.
+"""Python copies of shield-physics::checks.
 
-Kept in Python so the FastAPI fallback can decide PHY-004 / PHY-006 /
-PHY-007 without the Rust extension.  Coefficients must stay in lock-step
-with ``runtime/shield-physics/src/checks.rs``.
+So the FastAPI fallback can still fire PHY.SINGULARITY / PHY.TIPOVER /
+PHY.OVERLOAD (gold PHY-004 / 006 / 007) without the Rust ext. Keep the
+numbers identical to runtime/shield-physics/src/checks.rs or gold drifts.
 """
 
 from __future__ import annotations
@@ -31,7 +31,7 @@ def _ee_xyz(chain: Any, q: list[float]) -> list[float] | None:
 
 
 def positional_manipulability(chain: Any, q: list[float]) -> float | None:
-    """Numerical 3×n Jacobian, ``sqrt(det(J Jᵀ))``. ``None`` if chain can't run."""
+    """sqrt(det(J Jᵀ)) from a 3×n numerical Jacobian. None if the chain can't run."""
     n = len(q)
     if chain is None or getattr(chain, "dof", None) != n or n == 0:
         return None
@@ -91,7 +91,7 @@ def _tipover_reason(action: list[float]) -> Reason | None:
     return ("PHY.TIPOVER", detail, 1.0)
 
 
-def _overload_reason(
+def _overload_reason(  # pylint: disable=too-many-locals
     action: list[float],
     q: list[float],
     tau_cap: list[float],
@@ -128,7 +128,7 @@ def extra_physical_reasons(
     chain: Any | None = None,
     joint_names: list[str] | None = None,
 ) -> list[Reason]:
-    """Return singularity / tip-over / overload reasons for a projected state."""
+    """PHY.SINGULARITY / PHY.TIPOVER / PHY.OVERLOAD for the projected state."""
     n = len(action)
     if len(joints) == n:
         q = list(joints)

@@ -2,7 +2,7 @@ use shield_core::arbiter::{ArbiterDecision, SafetyEvent};
 use shield_core::types::RunMode;
 use sqlx::mysql::MySqlPool;
 
-/// MySQL-backed persistent store for safety events and action logs.
+/// MySQL store for safety events + action logs. Not on the hot path.
 pub struct MySqlStore {
     pool: MySqlPool,
 }

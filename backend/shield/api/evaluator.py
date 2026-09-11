@@ -1,19 +1,11 @@
-"""Lightweight runtime evaluator used by /v1/evaluate.
+"""/v1/evaluate guts.
 
-This module provides a backend-side evaluation path that can run with or
-without the Rust PyO3 extension:
+Prefers shield_ffi.ShieldPipeline (Rust). Python fallback when shield_ffi
+isn't built. Same reasons the Rust path emits.
 
-- Preferred: `shield_ffi.ShieldPipeline` (Rust hot-path)
-- Fallback: deterministic Python evaluator (joint/velocity checks)
-
-It also computes a shadow-path prior from the Python reference predictor so the
-API can emit `shadow_ms` and shadow-driven ontology triggers.
-
-The reasons surfaced through both paths are post-processed by
-:class:`shield.api.rule_engine.RuleRegistry`, which means severity, action
-(`block | clamp | warn`) and human-readable explanation text are sourced from
-``dataset/ontology/rules_*.json`` — keeping the data plane and the displayed
-documentation in lock-step.
+ShadowSimPredictor fills shadow_ms and can add ontology ids. RuleRegistry
+then stamps severity / block|clamp|warn / explanation from
+dataset/ontology/rules_*.json so the UI matches the files.
 """
 
 from __future__ import annotations
@@ -28,7 +20,6 @@ import numpy as np
 from shield.api.kinematics import (
     collision_pairs,
     default_urdf_for_dof,
-    fk_skeleton,
     fk_skeleton_for,
     forbidden_zone_hits,
     load_urdf_chain,
@@ -45,7 +36,7 @@ from shield.vfv.semantic import SemanticVFVPredictor
 
 try:
     import shield_ffi  # type: ignore[import-not-found]
-except ImportError:  # pragma: no cover - optional runtime dependency
+except ImportError:  # pragma: no cover — shield_ffi isn't built
     shield_ffi = None
 
 
@@ -55,6 +46,8 @@ ONTOLOGY_DIR = REPO_ROOT / "dataset" / "ontology"
 
 @dataclass
 class EvalInput:
+    """One /v1/evaluate request. image/obstacles are optional."""
+
     robot_id: str
     action: list[float]
     t_ns: int
@@ -67,7 +60,7 @@ class EvalInput:
 
 
 def _coerce_joints(current_joints: list[float], dof: int) -> list[float]:
-    """Pad / truncate ``current_joints`` to match ``dof`` (length of action)."""
+    """Pad or trim current_joints to the action's dof."""
     if not current_joints:
         return [0.0] * dof
     if len(current_joints) == dof:
@@ -95,7 +88,7 @@ def _sem_template_kwargs(score: float) -> dict[str, Any]:
 
 
 class ShieldEvaluator:
-    """Runtime evaluator facade used by the FastAPI endpoint."""
+    """What /v1/evaluate actually calls."""
 
     def __init__(
         self,
@@ -111,13 +104,14 @@ class ShieldEvaluator:
 
     @property
     def rules(self) -> RuleRegistry:
+        """Loaded rules_*.json. Same object the API uses for explanations."""
         return self._rules
 
     def _get_limits(self, dof: int) -> dict[str, list[float]]:
         torque_max = [50.0] * dof
         acceleration_max = [10.0] * dof
         if dof == 7:
-            # Franka wrist (joint 5, 0-based 4): 20 Nm nominal.
+            # Franka wrist (joint 5, 0-based index 4): 20 Nm nominal.
             torque_max[4] = 20.0
         if dof >= 8:
             acceleration_max[-1] = 1.5
@@ -162,7 +156,7 @@ class ShieldEvaluator:
         if spec is not None:
             try:
                 chain = load_urdf_chain(*spec)
-            except Exception:
+            except (OSError, ValueError, SyntaxError):
                 chain = None
         self._urdf_chains[dof] = chain
         return chain
@@ -194,12 +188,14 @@ class ShieldEvaluator:
         self._ffi_pipelines[key] = pipeline
         return pipeline
 
-    def _python_fallback(self, req: EvalInput, obstacles: list[dict]) -> dict[str, Any]:
+    def _python_fallback(  # pylint: disable=too-many-locals
+        self, req: EvalInput, obstacles: list[dict]
+    ) -> dict[str, Any]:
         dof = len(req.action)
         limits = self._get_limits(dof)
         reasons: list[tuple[str, str, float]] = []
 
-        # 1) velocity cap
+        # Velocity cap.
         for i, v in enumerate(req.action):
             vmax = limits["velocity_max"][i]
             if abs(v) > vmax:
@@ -212,7 +208,7 @@ class ShieldEvaluator:
                 )
                 reasons.append(("PHY.VELOCITY_LIMIT", detail, 0.6))
 
-        # 2) one-step projected position limit
+        # One-step projected position vs joint limits.
         projected = np.array(req.current_joints, dtype=np.float64) + self._dt * np.array(
             req.action, dtype=np.float64
         )
@@ -222,7 +218,10 @@ class ShieldEvaluator:
             if projected[i] < lower[i] or projected[i] > upper[i]:
                 detail = self._rules.render(
                     "PHY.JOINT_LIMIT",
-                    f"joint={i} projected={projected[i]:.3f} out_of [{lower[i]:.3f}, {upper[i]:.3f}]",
+                    (
+                        f"joint={i} projected={projected[i]:.3f} "
+                        f"out_of [{lower[i]:.3f}, {upper[i]:.3f}]"
+                    ),
                     joint_name=f"j{i}",
                     value=float(projected[i]),
                     lower=float(lower[i]),
@@ -231,7 +230,7 @@ class ShieldEvaluator:
                 )
                 reasons.append(("PHY.JOINT_LIMIT", detail, 1.0))
 
-        # 3) URDF (or EE) AABB vs scene obstacles
+        # URDF (or EE) AABB vs scene obstacles.
         chain = self._get_python_chain(dof)
         q_proj = [float(v) for v in projected]
         for link, obstacle in collision_pairs(q_proj, obstacles, chain):
@@ -270,7 +269,10 @@ class ShieldEvaluator:
         risk = max((r[2] for r in reasons), default=0.0)
         return {"reasons": reasons, "risk": risk}
 
-    def evaluate(self, req: EvalInput) -> dict[str, Any]:
+    def evaluate(  # pylint: disable=too-many-locals,too-many-branches,too-many-statements
+        self, req: EvalInput
+    ) -> dict[str, Any]:
+        """Rust pipeline if we have it, else Python. Always fills shadow + VFV."""
         dof = len(req.action)
         current = _coerce_joints(list(req.current_joints), dof)
         req = EvalInput(
@@ -289,9 +291,9 @@ class ShieldEvaluator:
         obstacle_tuples = obstacles_as_tuples(obstacles)
 
         t0 = time.perf_counter()
-        ingest_ms = 0.0  # the API layer measures wire-time separately
+        ingest_ms = 0.0  # wire-time is measured in the API layer, not here
 
-        # Shadow prior (reference predictor) for latency/risk enrichment.
+        # Python shadow prior — feeds shadow_ms and extra ontology ids.
         t_shadow0 = time.perf_counter()
         shadow = self._get_shadow_predictor(dof).predict(
             image=np.zeros((4, 4, 3), dtype=np.uint8),
@@ -310,7 +312,7 @@ class ShieldEvaluator:
             scene_hints=req.scene_hints,
         )
 
-        # Main decision path
+        # Rust if we have it, else Python.
         ffi_pipeline = self._get_ffi_pipeline(dof)
         used_ffi = False
         if ffi_pipeline is not None:
@@ -319,12 +321,10 @@ class ShieldEvaluator:
                 try:
                     setter(obstacle_tuples)
                 except TypeError:
-                    # Wheel predates the ontology-tagged tuple: send the plain
-                    # box and accept that zones come back as PHY.COLLISION.
+                    # Older wheels don't take the ontology-tagged tuple. Send
+                    # the plain box; zones may come back as PHY.COLLISION.
                     setter([row[:7] for row in obstacle_tuples])
-            # Prefer the zero-copy numpy path: borrows `&[f32]` and `&[f64]`
-            # straight from contiguous ndarrays instead of paying the Python
-            # list → Rust Vec iteration on every call.
+            # evaluate_numpy borrows contiguous ndarrays — skip list→Vec every tick.
             evaluate_numpy = getattr(ffi_pipeline, "evaluate_numpy", None)
             if evaluate_numpy is not None:
                 action_np = np.ascontiguousarray(req.action, dtype=np.float32)
@@ -364,7 +364,7 @@ class ShieldEvaluator:
                 "total_ms": 0.0,
             }
 
-        # Inject shadow prior into final decision if needed.
+        # Fold shadow hits in if physics didn't already fire them.
         if shadow.hazard_score >= 0.5:
             existing_ids = {oid for oid, _, _ in reasons}
             for oid in shadow.triggered_ontology_ids:
@@ -403,8 +403,7 @@ class ShieldEvaluator:
             risk = max(risk, max(score for _, _, score in reasons))
 
         total_ms = (time.perf_counter() - t0) * 1000.0
-        # Preserve FFI per-stage timings; only fill in shadow_ms (taken at API layer)
-        # and total wall-clock so downstream charts reflect real cost.
+        # Keep FFI stage timings. We only stamp shadow_ms (API-side) and total wall-clock.
         latency["shadow_ms"] = float(shadow_ms)
         if not used_ffi or not latency.get("total_ms"):
             latency["total_ms"] = float(total_ms)
@@ -423,7 +422,7 @@ class ShieldEvaluator:
             if skel_fn is not None:
                 try:
                     skeleton = [list(p) for p in skel_fn(list(req.current_joints))]
-                except Exception:
+                except (TypeError, ValueError, AttributeError):
                     skeleton = []
         if not skeleton:
             skeleton = fk_skeleton_for(req.current_joints, chain)

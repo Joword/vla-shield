@@ -1,4 +1,4 @@
-"""Visual Feedback Verification (VFV) — semantic risk from hints / optional CLIP."""
+"""VFV: semantic risk from hints, image cues, optional CLIP."""
 
 from shield.vfv.predictor import (
     DummyVFVPredictor,

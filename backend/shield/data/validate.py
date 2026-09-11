@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
-"""Validate red-team JSONL using the RedTeamEntry Pydantic model and report statistics.
+"""Walk a red-team JSONL through RedTeamEntry and print tag/split stats.
 
-Usage (run from backend/):
-  python -m shield.data.validate                                           # validate samples.jsonl
-  python -m shield.data.validate --data ../dataset/red_team/public.jsonl   # validate downloaded data
+From backend/:
+  python -m shield.data.validate
+  python -m shield.data.validate --data ../dataset/red_team/public.jsonl
 """
 
 from __future__ import annotations
@@ -22,7 +22,7 @@ DATASET_DIR = Path(__file__).resolve().parents[3] / "dataset"
 
 
 def validate(data_path: Path) -> int:
-    """Validate every line in a JSONL file as a RedTeamEntry. Returns error count."""
+    """Check each JSONL line as a RedTeamEntry. Returns how many rows failed."""
     lines = data_path.read_text(encoding="utf-8").strip().splitlines()
 
     errors = 0
@@ -64,6 +64,7 @@ def validate(data_path: Path) -> int:
 
 
 def main() -> None:
+    """Exit 1 if the JSONL fails schema / split / tag checks."""
     parser = argparse.ArgumentParser(description="Validate VLA-Shield red-team dataset")
     parser.add_argument(
         "--data",

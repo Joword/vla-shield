@@ -1,26 +1,20 @@
-// Host-side C++ glue between the Rust FFI boundary and the CUDA kernel.
+// Host glue: Rust FFI ↔ CUDA kernel.
 //
-// Two API tiers are exposed across the C ABI:
+// Two C-ABI tiers:
 //
-//   1. Stateless one-shot:
+//   1. One-shot:
 //        int shield_cuda_clamp(host*, host*, host*, n);
-//      Allocates / copies / frees per call.  Convenient for tests; not for
-//      the hot path.
+//      Alloc / copy / free every call. Fine for tests, not the hot path.
 //
-//   2. Stateful context (preferred on hot path):
+//   2. Context (the hot path):
 //        int  shield_cuda_ctx_create(size_t capacity, void** out_ctx);
 //        void shield_cuda_ctx_destroy(void* ctx);
 //        int  shield_cuda_ctx_clamp(void* ctx, host*, host*, host*, n);
-//      The context caches:
-//        * three device buffers sized for `capacity` floats (cudaMalloc once),
-//        * three pinned host staging buffers (cudaMallocHost),
-//        * one persistent CUDA stream for async copies + launches.
-//      Subsequent calls with n <= capacity reuse all of the above; calls with
-//      n > capacity transparently grow the buffers.
+//      Caches three device buffers, three pinned host buffers, one stream.
+//      n <= capacity reuses them; n > capacity grows.
 //
-// Small-n CPU bypass lives in the Rust wrapper (CudaCtx::clamp_into).
-// This file always runs the GPU path when invoked, so A/B benches can
-// force the kernel with CudaCtx::set_min_gpu_n(0).
+// Small-n CPU bypass lives in Rust (`CudaCtx::clamp_into`). This file always
+// runs the GPU path, so A/B benches can force it with `set_min_gpu_n(0)`.
 
 #include "cuda_runtime_compat.h"
 #include <stddef.h>
@@ -59,8 +53,7 @@ void free_pinned_buffers(ShieldCudaCtx* c) {
     if (c->h_output) { cudaFreeHost(c->h_output); c->h_output = nullptr; }
 }
 
-// (Re)allocate all three device buffers and the three pinned host buffers
-// for `new_capacity` floats.  Returns 0 on success or a CUDA error code.
+// Grow device + pinned buffers to `new_capacity` floats. 0 = ok, else CUDA code.
 int reserve(ShieldCudaCtx* c, size_t new_capacity) {
     if (new_capacity <= c->capacity_floats) {
         return 0;
@@ -90,7 +83,7 @@ int reserve(ShieldCudaCtx* c, size_t new_capacity) {
 
 }  // namespace
 
-// --- Stateless API (kept for tests and simple callers) ----------------------
+// --- One-shot API (tests / simple callers) ----------------------------------
 
 extern "C" int shield_cuda_clamp(
     const float* host_input,
@@ -134,7 +127,7 @@ extern "C" int shield_cuda_clamp(
     return static_cast<int>(err);
 }
 
-// --- Stateful context API (preferred on the hot path) -----------------------
+// --- Context API (hot path) -------------------------------------------------
 
 extern "C" int shield_cuda_ctx_create(size_t initial_capacity, void** out_ctx) {
     if (out_ctx == nullptr) {
@@ -189,8 +182,7 @@ extern "C" int shield_cuda_ctx_clamp(
         return rc;
     }
 
-    // Copy callers' host buffers into pinned staging buffers so the
-    // subsequent HtoD transfer can run async on our private stream.
+    // Stage into pinned buffers so the HtoD copy can run async on our stream.
     memcpy(c->h_input, host_input, n * sizeof(float));
     memcpy(c->h_limit, host_limit, n * sizeof(float));
 
@@ -217,10 +209,10 @@ extern "C" int shield_cuda_ctx_clamp(
     return 0;
 }
 
-// AABB-AABB overlap for N link boxes vs M obstacles.  Packed as
-// xyz-min / xyz-max float arrays (3 * n).  hits[i] = 1 if link i hits any obstacle.
-// Typical N,M are tiny (links × scene entities); this stays on the host even
-// in the CUDA build.  The C ABI exists so collision can share one entry point.
+// AABB overlap: N link boxes vs M obstacles. Packed xyz-min / xyz-max
+// (3 * n). hits[i] = 1 if link i hits anything. Typical N,M are tiny, so
+// this stays on the host even in the CUDA build. One C ABI so collision
+// doesn't care which backend compiled.
 extern "C" int shield_cuda_aabb_hits(
     const float* link_min,
     const float* link_max,

@@ -13,7 +13,7 @@ import { useTelemetryWs } from "@/hooks/useTelemetryWs";
 
 export default function MonitorPage() {
   const [robotId, setRobotId] = useState("ur5e-lab-01");
-  useTelemetryWs(robotId);
+  useTelemetryWs(robotId); // store updates land via the WS hook, not this component
   const { risk, decision, ontologyIds, ontologyDetails } = useTelemetryStore();
 
   return (

@@ -15,7 +15,7 @@ use shield_shadow::{JointSpaceSimulator, ShadowSimulator};
 use shield_urdf::{AxisAlignedBox, UrdfKinematicChain, UrdfRobot};
 use std::time::Instant;
 
-/// The main safety-check pipeline orchestrating projection → collision → arbiter.
+/// Hot path: project → collide → arbiter. That's the loop.
 pub struct SafetyPipeline {
     pub config: RuntimeConfig,
     projector: Box<dyn PhysicalProjector>,
@@ -41,7 +41,7 @@ impl SafetyPipeline {
         }
     }
 
-    /// Default projector + AABB checker, optionally bound to a URDF chain.
+    /// Default projector + AABB checker. Pass a URDF chain if you've got one.
     pub fn with_defaults(config: RuntimeConfig) -> Self {
         Self::new(
             config,
@@ -76,9 +76,9 @@ impl SafetyPipeline {
     }
 
     /// One-step clamp through the same projector the hot path uses, expressed
-    /// back as a velocity command. Honours both the velocity cap and the
-    /// position limits, so a CLAMP verdict cannot emit an action the physics
-    /// stage would have rejected. `None` when the projector refuses the state.
+    /// back as a velocity command. Respects vel cap *and* position limits, so a
+    /// CLAMP verdict can't emit something physics would have rejected. `None`
+    /// if the projector refuses the state.
     pub fn clamped_action(
         &self,
         action: &ActionVector,
@@ -109,16 +109,15 @@ impl SafetyPipeline {
         )
     }
 
-    /// Override the default shadow simulator.
+    /// Swap the default shadow sim. `None` turns it off.
     pub fn with_shadow_simulator(mut self, sim: Option<Box<dyn ShadowSimulator>>) -> Self {
         self.shadow_simulator = sim;
         self
     }
 
-    /// Run the full hot-path pipeline for a single action.
+    /// One action through the hot path.
     ///
-    /// `shadow` carries the result from the previous async shadow simulation
-    /// pass (stale-safe: `None` means no shadow data available yet).
+    /// `shadow` is last async sim result. `None` = nothing ready yet; that's fine.
     pub fn evaluate(
         &self,
         action: &ActionVector,
@@ -148,8 +147,8 @@ impl SafetyPipeline {
         let physics_done = Instant::now();
         let physics_ms = physics_done.duration_since(ingest_done).as_secs_f64() * 1000.0;
 
-        // FK for the collision boxes runs once here so its cost is reported
-        // separately instead of hiding inside `collision_ms`.
+        // FK for collision boxes runs once here so we can report its cost
+        // instead of stuffing it into `collision_ms`.
         let mut urdf_fk_ms = None;
         let link_boxes = match (&proposal, chain_ref) {
             (Ok(p), Some(chain)) => {
@@ -271,11 +270,11 @@ impl SafetyPipeline {
             }
         }
 
-        // Incorporate shadow simulation risk prior (async, stale-safe).
+        // Shadow prior from the async pass. Stale is fine.
         if let Some(sr) = shadow {
             if sr.risk_score > 0.5 {
                 for oid in &sr.triggered_ids {
-                    // Only add if not already present to avoid duplicates.
+                    // Don't double-count an id that's already in `reasons`.
                     if !reasons.iter().any(|r| &r.ontology_id == oid) {
                         reasons.push(ArbiterReason {
                             ontology_id: oid.clone(),

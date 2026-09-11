@@ -1,6 +1,4 @@
-//! Micro-benchmark: CPU bypass vs cached C backend vs stateless one-shot.
-//!
-//! Run with:
+//! Micro-bench: CPU bypass vs cached C backend vs stateless one-shot.
 //!
 //! ```text
 //! cd runtime
@@ -8,9 +6,9 @@
 //! cargo run -p shield-cuda --example bench_clamp --release -- --iters 20000 --dof 256
 //! ```
 //!
-//! Default `--dof 8` is a typical VLA arm.  The cached-context path then
-//! stays on the CPU (`n < DEFAULT_MIN_GPU_N`).  Pass `--force-gpu` (or
-//! `--dof` ≥ 64) to force the C backend for an A/B comparison.
+//! Default `--dof 8` is a typical VLA arm, so the cached ctx stays on CPU
+//! (`n < DEFAULT_MIN_GPU_N`). Pass `--force-gpu` (or `--dof` ≥ 64) to force
+//! the C backend for an A/B.
 
 use std::time::Instant;
 
@@ -85,7 +83,7 @@ fn main() {
     let limit: Vec<f32> = vec![1.0; dof];
     let mut out_buf = vec![0.0_f32; dof];
 
-    // Warmup.
+    // Warmup so the first timed call isn't the allocator.
     clamp_cpu(&input, &limit, &mut out_buf);
     let _ = clamp_action_cuda(&input, &limit).unwrap();
 

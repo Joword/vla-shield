@@ -1,4 +1,4 @@
-//! Forward kinematics and a simple positional manipulability measure.
+//! FK plus a cheap positional manipulability number.
 
 use std::collections::HashMap;
 
@@ -8,16 +8,16 @@ use shield_core::types::Aabb;
 use crate::error::UrdfError;
 use crate::urdf_loader::{JointSpec, UrdfRobot};
 
-/// Ordered revolute chain from URDF (base link -> end-effector link).
+/// Ordered revolute chain: base link → EE.
 #[derive(Debug, Clone)]
 pub struct UrdfKinematicChain {
     joints: Vec<JointSpec>,
-    /// Link-frame AABBs keyed by link name (root + every child on the chain).
+    /// Link-frame AABBs keyed by name (root + every child on the chain).
     link_aabbs: HashMap<String, Aabb>,
 }
 
 impl UrdfKinematicChain {
-    /// Build chain from a parsed robot.
+    /// Build from a parsed robot.
     pub fn from_robot(robot: &UrdfRobot, root_link: &str, ee_link: &str) -> Result<Self, UrdfError> {
         let joints = robot.chain_to(root_link, ee_link)?;
         Ok(Self {
@@ -42,7 +42,7 @@ impl UrdfKinematicChain {
         self.joints.last().map(|j| j.child.as_str())
     }
 
-    /// Link frames from root (identity) through each joint child, in chain order.
+    /// Link frames from root (identity) through each child, in chain order.
     pub fn link_frames(&self, q: &[f64]) -> Result<Vec<(String, Isometry3<f64>)>, UrdfError> {
         if q.len() != self.dof() {
             return Err(UrdfError::DimensionMismatch {
@@ -62,7 +62,7 @@ impl UrdfKinematicChain {
         Ok(frames)
     }
 
-    /// Cartesian waypoints `[root, j1_child, …, ee]` in the root frame.
+    /// Waypoints `[root, j1_child, …, ee]` in the root frame.
     pub fn skeleton(&self, q: &[f64]) -> Result<Vec<[f64; 3]>, UrdfError> {
         Ok(self
             .link_frames(q)?
@@ -74,7 +74,7 @@ impl UrdfKinematicChain {
             .collect())
     }
 
-    /// World-frame AABBs for every link that has geometry.
+    /// World AABBs for every link that actually has geometry.
     pub fn link_world_aabbs(&self, q: &[f64]) -> Result<Vec<(String, Aabb)>, UrdfError> {
         let frames = self.link_frames(q)?;
         let mut out = Vec::with_capacity(frames.len());
@@ -86,7 +86,7 @@ impl UrdfKinematicChain {
         Ok(out)
     }
 
-    /// End-effector isometry in the root link frame (same convention as ROS chain product).
+    /// EE isometry in the root link frame. Same product ROS uses.
     pub fn forward_isometry(&self, q: &[f64]) -> Result<Isometry3<f64>, UrdfError> {
         if q.len() != self.dof() {
             return Err(UrdfError::DimensionMismatch {
@@ -101,21 +101,21 @@ impl UrdfKinematicChain {
         Ok(world)
     }
 
-    /// End-effector position `[x, y, z]` in the root link frame.
+    /// EE xyz in the root link frame.
     pub fn ee_position(&self, q: &[f64]) -> Result<[f64; 3], UrdfError> {
         let iso = self.forward_isometry(q)?;
         let t = iso.translation.vector;
         Ok([t.x, t.y, t.z])
     }
 
-    /// Unit quaternion `[x, y, z, w]` for end-effector orientation (root frame).
+    /// Unit quat `[x, y, z, w]` for EE orientation (root frame).
     pub fn ee_orientation_quat(&self, q: &[f64]) -> Result<[f64; 4], UrdfError> {
         let iso = self.forward_isometry(q)?;
         let q = iso.rotation.quaternion();
         Ok([q.i, q.j, q.k, q.w])
     }
 
-    /// Positional manipulability `sqrt(det(J J^T))` using numerical Jacobian (3 x n).
+    /// Positional manipulability `sqrt(det(J J^T))` via a numerical 3×n Jacobian.
     pub fn positional_manipulability(&self, q: &[f64]) -> Result<f64, UrdfError> {
         if q.len() != self.dof() {
             return Err(UrdfError::DimensionMismatch {
@@ -144,7 +144,7 @@ impl UrdfKinematicChain {
     }
 }
 
-/// Default threshold below which the arm is treated as near a kinematic singularity.
+/// Below this, treat the arm as near a singularity.
 /// Matches `dataset/ontology/rules_physical.json` (`min_manipulability`: 0.05).
 pub const SINGULARITY_MANIPULABILITY_THRESHOLD: f64 = 0.05;
 

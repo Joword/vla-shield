@@ -26,6 +26,7 @@ export default function RiskGauge({ score, decision }: RiskGaugeProps) {
       <div className="mt-3 h-2 bg-gray-700 rounded-full overflow-hidden">
         <div
           className={`h-full rounded-full transition-all duration-200 ${style.bar}`}
+          // PASS can be a true zero bar; anything else keeps a 4% sliver so it doesn't vanish.
           style={{ width: `${Math.max(pct, decision === "PASS" ? 0 : 4)}%` }}
         />
       </div>

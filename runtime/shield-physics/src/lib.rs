@@ -10,7 +10,7 @@ use shield_core::types::JointLimits;
 pub use checks::{extra_physical_reasons, ontology_for_projection_error};
 pub use semantic::{SemanticConstraint, SemanticConstraintMapper};
 
-/// Proposed dynamic state after applying an action.
+/// Joints + EE after one projected step.
 #[derive(Debug, Clone)]
 pub struct DynProposal {
     pub joint_positions: Vec<f64>,
@@ -19,21 +19,21 @@ pub struct DynProposal {
     pub ee_orientation: [f64; 4],
 }
 
-/// Context required for projection.
+/// Stuff `project()` needs. Borrowed — don't stash this.
 pub struct ProjectionContext<'a> {
     pub current_joints: &'a [f64],
     pub limits: &'a JointLimits,
     pub scene: &'a SceneGraph,
     pub dt: f64,
-    /// When set, end-effector pose is computed via URDF forward kinematics.
+    /// When set, EE pose comes from URDF FK instead of the origin placeholder.
     pub urdf_chain: Option<&'a shield_urdf::UrdfKinematicChain>,
-    /// Cartesian forbidden regions in the same frame as FK (typically base link).
+    /// Cartesian no-go boxes in the same frame as FK (usually base link).
     pub forbidden_zones: &'a [shield_urdf::AxisAlignedBox],
-    /// Active semantic constraints mapped from SEM.* ontology nodes.
+    /// Live SEM.* constraints (heat, humans, …).
     pub semantic_constraints: &'a [SemanticConstraint],
 }
 
-/// Trait for projecting abstract VLA actions into physical-space proposals.
+/// Turn a VLA command into a physical proposal (joints + EE).
 pub trait PhysicalProjector: Send + Sync {
     fn project(&self, ctx: &ProjectionContext, action: &ActionVector) -> Result<DynProposal>;
 }

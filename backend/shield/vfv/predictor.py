@@ -1,4 +1,4 @@
-"""VFV predictor: given (image, action, language), estimate risk of consequence."""
+"""VFV: (image, action, language) → hazard score + ontology ids."""
 
 from __future__ import annotations
 
@@ -10,10 +10,11 @@ import numpy as np
 
 @dataclass
 class VFVResult:
+    """Hazard + triggered SEM/PHY ids. trajectory is joint-space for the monitor."""
     hazard_score: float
     triggered_ontology_ids: list[str]
     predicted_frame: np.ndarray | None = None
-    # Joint-space samples along the shadow roll-forward, including q0.
+    # Includes q0. Monitor draws this as the shadow polyline.
     trajectory: list[list[float]] = field(default_factory=list)
     scores: dict[str, float] = field(default_factory=dict)
     backend: str = "none"
@@ -21,7 +22,7 @@ class VFVResult:
 
 @dataclass
 class UrdfShadowConfig:
-    """Minimal URDF-style joint limits for joint-space shadow simulation (Python reference)."""
+    """Just joint limits for the Python shadow sim. Not a full URDF."""
 
     dof: int
     joint_limit_lower: list[float]
@@ -29,7 +30,7 @@ class UrdfShadowConfig:
 
 
 class VFVPredictor(ABC):
-    """Base class for Visual Feedback Verification predictors."""
+    """image + action + task → VFVResult."""
 
     @abstractmethod
     def predict(
@@ -40,12 +41,12 @@ class VFVPredictor(ABC):
         current_joints: list[float] | None = None,
         scene_hints: list[str] | None = None,
     ) -> VFVResult:
-        """Predict safety risk of executing `action` given current `image` and task."""
-        ...
+        """Hazard + triggered ids for this action. scene_hints is optional."""
+        raise NotImplementedError
 
 
 class DummyVFVPredictor(VFVPredictor):
-    """Always-safe placeholder for testing."""
+    """Always PASS. Tests / when you don't want VFV."""
 
     def predict(
         self,
@@ -60,10 +61,10 @@ class DummyVFVPredictor(VFVPredictor):
 
 
 class ShadowSimPredictor(VFVPredictor):
-    """Joint-space shadow trajectory: interpolate from current joints toward the integrated command.
+    """Roll joints forward in joint space, clamp to URDF limits.
 
-    Mirrors the Rust runtime's "shadow path" idea: sample intermediate joint vectors and
-    clamp to URDF limits. This is a lightweight Python reference, not a full dynamics sim.
+    Same idea as the Rust shadow path. Python reference, not a dynamics sim.
+    Visual scoring lives on SemanticVFVPredictor.
     """
 
     def __init__(
@@ -104,7 +105,9 @@ class ShadowSimPredictor(VFVPredictor):
 
         for s in range(1, self._steps + 1):
             alpha = s / self._steps
-            q = np.array(q0, dtype=np.float64) + alpha * self._dt * np.array(action, dtype=np.float64)
+            q = np.array(q0, dtype=np.float64) + alpha * self._dt * np.array(
+                action, dtype=np.float64
+            )
             q = np.clip(q, lower, upper)
             trajectory.append(q.astype(float).tolist())
             if np.any(q <= lower + 1e-9) or np.any(q >= upper - 1e-9):

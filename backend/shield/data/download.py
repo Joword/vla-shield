@@ -1,11 +1,10 @@
 #!/usr/bin/env python3
-"""Dataset preparation for VLA-Shield red-team / evaluation data.
+"""Smoke path: copy samples.jsonl → public.jsonl.
 
-Embodied robotics safety benchmarks (trajectory labels, URDF-scenario violations)
-will be integrated in Phase 1. This module provides a smoke path that copies the
-repository's bilingual samples into ``public.jsonl`` for local validation.
+Real embodied-safety dumps (traj labels, URDF violations) aren't wired in
+yet. For now, copy the repo samples so validate can run locally.
 
-Usage (from backend/):
+From backend/:
   python -m shield.data.download
   python -m shield.data.download --output ../dataset/red_team/public.jsonl
 """
@@ -20,6 +19,7 @@ DATASET_DIR = Path(__file__).resolve().parents[3] / "dataset"
 
 
 def main() -> None:
+    """Copy samples.jsonl → public.jsonl (or --output)."""
     parser = argparse.ArgumentParser(
         description=(
             "Prepare red-team JSONL for VLA-Shield. "

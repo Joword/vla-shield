@@ -1,9 +1,8 @@
-//! Extra physical checks that do not belong inside kinematic clamping.
+//! Extra physics that does *not* belong inside the velocity/position clamp.
 //!
-//! The projector still only clamps velocity/position.  Singularity, tip-over
-//! and overload are reported as ontology-tagged reasons so the arbiter can
-//! keep its block > clamp > warn ranking instead of collapsing them into a
-//! generic `project()` error (which the FFI used to map to `PHY.JOINT_LIMIT`).
+//! Projector still only clamps. Singularity / tip-over / overload come back as
+//! tagged reasons so the arbiter can keep BLOCK > CLAMP > WARN. Don't fold them
+//! into a generic `project()` error — FFI used to slam that into `PHY.JOINT_LIMIT`.
 
 use shield_core::action::ActionVector;
 use shield_core::arbiter::ArbiterReason;
@@ -13,14 +12,13 @@ use shield_urdf::{UrdfKinematicChain, SINGULARITY_MANIPULABILITY_THRESHOLD};
 
 use crate::DynProposal;
 
-/// Last three joints of a serial arm: high-rate wrist commands produce large
-/// estimated effort.  Proximal joints use a much smaller coefficient so a
-/// UR5 base-velocity spike (PHY-003, 10 rad/s vs 50 Nm default) does not
-/// masquerade as overload.
+/// Last three joints: wrist spikes look like a lot of torque. Proximal joints
+/// get a tiny coefficient so a UR5 base-velocity spike (PHY-003, 10 rad/s vs
+/// 50 Nm default) doesn't masquerade as overload.
 const DISTAL_INERTIA: f64 = 24.0;
 const PROXIMAL_INERTIA: f64 = 2.0;
 
-/// Last channel of an 8+ DoF command is treated as base linear acceleration.
+/// Last channel of an 8+ DoF command is treated as base linear accel.
 const MOBILE_BASE_ACCEL_LIMIT: f64 = 1.5;
 const COM_HEIGHT_M: f64 = 0.80;
 const SUPPORT_HALF_M: f64 = 0.25;
@@ -30,10 +28,10 @@ const G: f64 = 9.81;
 /// Elbow-lock heuristic for 7-DoF arms (Franka joint 4 ≈ 0).
 const ELBOW_LOCK_RAD: f64 = 0.08;
 
-/// Collect singularity / tip-over / overload reasons for a projected state.
+/// Singularity / tip-over / overload reasons for a projected state.
 ///
-/// `proposal` may be `None` when projection itself failed; tip-over and
-/// overload still inspect the raw command.
+/// `proposal` can be `None` if projection itself failed; tip-over and overload
+/// still look at the raw command.
 pub fn extra_physical_reasons(
     action: &ActionVector,
     current_joints: &[f64],
@@ -67,10 +65,10 @@ fn singularity_reason(q: &[f64], chain: Option<&UrdfKinematicChain>) -> Option<A
             }
         }
     }
-    // Numerical floor is a near-rank-deficient Jacobian.  The ontology
-    // 0.05 threshold is the wrong scale for this simplified Panda URDF
-    // (ready poses sit around 0.04), so 7-DoF Franka gold cases use the
-    // elbow-lock heuristic instead (joint 4 ≈ 0).
+    // Numerical floor = near-rank-deficient Jacobian. The ontology 0.05
+    // threshold is the wrong scale for this simplified Panda URDF (ready
+    // poses sit around 0.04), so 7-DoF Franka gold cases use elbow-lock
+    // instead (joint 4 ≈ 0).
     let below = manip.map(|m| m < 1e-3).unwrap_or(false);
     let elbow = near_elbow_lock(q);
     if !below && !elbow {
@@ -88,7 +86,7 @@ fn singularity_reason(q: &[f64], chain: Option<&UrdfKinematicChain>) -> Option<A
 
 fn near_elbow_lock(q: &[f64]) -> bool {
     // 7-DoF Panda only: joint 4 (index 3) near 0 is the textbook elbow lock.
-    // 8-DoF mobile stacks also have a joint at index 3; they must not inherit this.
+    // 8-DoF mobile stacks also have a joint at index 3; don't inherit this.
     q.len() == 7 && q[3].abs() < ELBOW_LOCK_RAD
 }
 
@@ -155,8 +153,8 @@ fn overload_reason(
     })
 }
 
-/// Map a projector error string onto the ontology id the FFI historically
-/// recovered by substring search.
+/// Map a projector error string onto the ontology id the FFI used to recover
+/// by substring search. Don't slam everything into JOINT_LIMIT.
 pub fn ontology_for_projection_error(msg: &str) -> shield_core::ontology::OntologyId {
     let m = msg.to_lowercase();
     if m.contains("forbidden") {

@@ -1,26 +1,24 @@
-//! Joint-space shadow path simulation.
+//! Joint-space shadow look-ahead.
 //!
-//! Interpolates from the current joint configuration toward the integrated
-//! velocity command over `steps` intermediate points, checking joint limits
-//! and optional forbidden Cartesian zones at each step.
+//! Interpolate current q toward the integrated velocity command over `steps`
+//! points. At each step: joint limits + optional Cartesian no-go via FK.
 //!
-//! This module mirrors the Python `ShadowSimPredictor` reference implementation
-//! but runs natively in Rust and can be called from the async safety layer
-//! without touching the hot-path budget.
+//! Same idea as the Python `ShadowSimPredictor`, but native and off the
+//! hot-path budget.
 
 use crate::result::ShadowResult;
 use shield_core::ontology::physical;
 use shield_core::types::JointLimits;
 use shield_urdf::{AxisAlignedBox, UrdfKinematicChain};
 
-/// Configuration for a joint-space shadow simulation pass.
+/// Knobs for one joint-space shadow pass.
 #[derive(Debug, Clone)]
 pub struct JointSpaceShadowConfig {
-    /// Number of interpolation steps (minimum 2).
+    /// Interpolation steps (min 2).
     pub steps: usize,
-    /// Integration time step in seconds.
+    /// Integration dt in seconds.
     pub dt: f64,
-    /// Safety margin (radians) inside joint limits before raising a flag.
+    /// Flag when we're this many rad inside the joint limit.
     pub limit_margin_rad: f64,
 }
 
@@ -34,15 +32,10 @@ impl Default for JointSpaceShadowConfig {
     }
 }
 
-/// Simulate a shadow trajectory in joint space and return a risk summary.
+/// Walk a shadow trajectory in joint space, return a risk summary.
 ///
-/// # Arguments
-/// * `config`         - Simulation parameters.
-/// * `current_joints` - Current joint positions (rad).
-/// * `action`         - Joint velocity command (rad/s).
-/// * `limits`         - URDF joint limits.
-/// * `urdf_chain`     - Optional FK chain for Cartesian zone checks.
-/// * `forbidden_zones`- Cartesian forbidden zones in the base-link frame.
+/// `current_joints` / `action` in rad and rad/s. `forbidden_zones` are in
+/// the base-link frame. Pass `urdf_chain` if you want Cartesian checks.
 pub fn simulate(
     config: &JointSpaceShadowConfig,
     current_joints: &[f64],
@@ -61,19 +54,19 @@ pub fn simulate(
     for step in 1..=steps {
         let alpha = step as f64 / steps as f64;
 
-        // Integrate velocity toward the final commanded position.
+        // Integrate velocity toward the commanded pose.
         let mut q: Vec<f64> = current_joints
             .iter()
             .zip(action.iter())
             .map(|(q0, v)| q0 + alpha * config.dt * v)
             .collect();
 
-        // Clamp to limits.
+        // Stay inside limits.
         for i in 0..ndof {
             q[i] = q[i].clamp(limits.position_min[i], limits.position_max[i]);
         }
 
-        // Check for joint limit approach (within margin).
+        // Approaching a joint limit (within margin) → flag it.
         for i in 0..ndof {
             let margin = config.limit_margin_rad;
             if q[i] <= limits.position_min[i] + margin
@@ -89,7 +82,7 @@ pub fn simulate(
             }
         }
 
-        // Optional: Cartesian forbidden-zone check via FK.
+        // Optional Cartesian no-go via FK.
         if let Some(chain) = urdf_chain {
             if chain.dof() == ndof {
                 if let Ok(ee) = chain.ee_position(&q) {

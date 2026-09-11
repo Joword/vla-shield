@@ -3,10 +3,8 @@ use crate::{DynProposal, PhysicalProjector, ProjectionContext};
 use shield_core::action::ActionVector;
 use shield_core::error::{Result, shieldError};
 
-/// Conservative kinematic projector that clamps action deltas to joint limits.
-///
-/// This is the simplest projector: it treats `action.data` as joint-space velocity
-/// commands and clamps them to `limits.velocity_max`, then integrates one step.
+/// Dumb-but-safe projector: treat `action.data` as joint vel, clamp to
+/// `velocity_max`, integrate one step, clamp position. That's it.
 pub struct KinematicClampProjector;
 
 impl PhysicalProjector for KinematicClampProjector {
@@ -52,7 +50,7 @@ impl PhysicalProjector for KinematicClampProjector {
             ([0.0; 3], [0.0, 0.0, 0.0, 1.0])
         };
 
-        // Check URDF-derived Cartesian forbidden zones.
+        // URDF Cartesian no-go boxes.
         for zone in ctx.forbidden_zones {
             if zone.contains(&ee_position) {
                 return Err(shieldError::Projection(
@@ -61,7 +59,7 @@ impl PhysicalProjector for KinematicClampProjector {
             }
         }
 
-        // Check semantic exclusion zones (SEM.HEAT_SOURCE, SEM.FORBIDDEN_REGION, etc.).
+        // SEM.* exclusion zones (heat, forbidden region, …).
         let sem_mapper = SemanticConstraintMapper::new(ctx.semantic_constraints);
         for (zone, oid) in sem_mapper.exclusion_zones() {
             if zone.contains(&ee_position) {

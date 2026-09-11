@@ -1,16 +1,12 @@
-"""
-Latency stress-test for the VLA-Shield hot-path pipeline.
+"""Hammer the hot path and see where the milliseconds go.
 
-Submits N random actions to the /v1/evaluate endpoint (or directly via the
-Rust FFI module if --use-ffi is set) and collects per-stage latency metrics.
+Fires N random actions at /v1/evaluate. Pass --use-ffi to skip HTTP and talk
+to the Rust module directly.
 
-Usage
------
     python benchmark/run_latency.py --dof 6 --n-actions 10000 --output results/latency.jsonl
 
-Outputs a JSONL file where each line is a LatencyBreakdown JSON object with an
-additional ``action_idx`` field.  Summary statistics (p50/p95/p99) are printed
-to stdout at the end.
+JSONL is one LatencyBreakdown per line, plus action_idx. We print p50/p95/p99
+when we're done.
 """
 from __future__ import annotations
 
@@ -27,7 +23,7 @@ import numpy as np
 
 try:
     import shield_ffi  # type: ignore[import-not-found]
-except ImportError:  # pragma: no cover - optional Rust extension
+except ImportError:  # pragma: no cover — FFI isn't always built
     shield_ffi = None  # type: ignore[assignment]
 
 
@@ -36,7 +32,7 @@ def _random_action(dof: int, scale: float = 1.0) -> list[float]:
 
 
 def _percentile(data: list[float], p: float) -> float:
-    """Compute the p-th percentile (0–100) of a sorted list."""
+    """p-th percentile, p in 0–100. Empty → nan. We sort a copy, so unsorted input is fine."""
     if not data:
         return float("nan")
     data_sorted = sorted(data)
@@ -53,9 +49,9 @@ def run_http(
     dof: int,
     n_actions: int,
     robot_id: str,
-    output: Path | None,  # noqa: ARG001 - kept to mirror run_ffi signature
+    output: Path | None,  # noqa: ARG001 — unused; same shape as run_ffi so callers can swap them
 ) -> list[dict]:
-    """Run latency benchmark via the FastAPI HTTP endpoint."""
+    """POST /v1/evaluate in a loop and pull latency out of the JSON."""
     url = f"{endpoint.rstrip('/')}/v1/evaluate"
     results: list[dict] = []
 
@@ -97,16 +93,15 @@ def run_http(
 def run_ffi(
     dof: int,
     n_actions: int,
-    output: Path | None,  # noqa: ARG001
+    output: Path | None,  # noqa: ARG001 — unused; kept so the signature matches run_http
     *,
     use_numpy: bool = True,
 ) -> list[dict]:
-    """Run latency benchmark directly via the Rust FFI module (no HTTP overhead).
+    """Skip HTTP — call the Rust FFI directly.
 
-    When ``use_numpy`` is True (default), feeds the pipeline through the
-    zero-copy ``evaluate_numpy`` path that borrows directly from contiguous
-    ``numpy.ndarray`` buffers; otherwise uses the original list-based
-    ``evaluate`` for an A/B comparison.
+    use_numpy=True (default) goes through evaluate_numpy so we borrow the
+    ndarray buffer instead of copying a Python list. Flip it off when you
+    want the list path as a baseline.
     """
     if shield_ffi is None:
         sys.exit(
@@ -174,7 +169,7 @@ def print_summary(results: list[dict]) -> None:
 
     total = col("total_ms")
     if total:
-        over_budget = sum(1 for v in total if v > 5.0)
+        over_budget = sum(1 for v in total if v > 5.0)  # same 5ms budget the monitor chart uses
         print(
             f"\n  budget_violation_rate (>5 ms): "
             f"{over_budget}/{len(total)} = {over_budget / len(total) * 100:.2f}%"

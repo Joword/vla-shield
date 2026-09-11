@@ -7,6 +7,7 @@ export interface DecisionStyle {
   hex: string;
 }
 
+/** Colors for the badge / bar / 3D arm. Unknown strings get PASS green. */
 export function decisionStyle(decision: string): DecisionStyle {
   switch (decision) {
     case "BLOCK":
@@ -40,6 +41,7 @@ export function decisionStyle(decision: string): DecisionStyle {
   }
 }
 
+/** Sidebar heading. Keep these in sync with the labels on the panel. */
 export function reasonsTitle(decision: string): string {
   switch (decision) {
     case "BLOCK":

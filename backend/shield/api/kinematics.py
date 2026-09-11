@@ -1,8 +1,7 @@
-"""Serial-arm FK for the digital-twin monitor and Python fallback evaluator.
+"""FK for the monitor and the Python evaluator.
 
-Prefers a URDF chain (same convention as ``shield-urdf``: Z-up, metres).
-A lightweight yaw/pitch sketch is kept as a last-resort fallback when no
-URDF is available.  The monitor converts to Three.js Y-up at render time.
+URDF chain first (same as shield-urdf: Z-up, metres). Yaw/pitch sketch
+only if there's no URDF. Monitor flips to Three.js Y-up at render time.
 """
 
 from __future__ import annotations
@@ -13,12 +12,12 @@ from dataclasses import dataclass
 from functools import lru_cache
 from pathlib import Path
 
-# UR5-ish link lengths (base lift is applied separately).  Extra DoF
-# beyond 6 reuse 8 cm distal links.
+# UR5-ish link lengths (base lift is applied separately). Extra DoF
+# past 6 get 8 cm distal links.
 _BASE_LINKS = (0.12, 0.35, 0.30, 0.12, 0.10, 0.08)
 _BASE_LIFT = 0.12
 
-# Default table-side obstacle, matching the old SceneView placeholder box.
+# Table-side demo box — same placeholder SceneView used to hard-code.
 DEFAULT_ZONES: list[dict] = [
     {
         "min": [0.55, -0.15, 0.0],
@@ -30,7 +29,7 @@ DEFAULT_ZONES: list[dict] = [
 
 
 def link_lengths_for_dof(dof: int) -> list[float]:
-    """Sketch-model link lengths for ``dof`` (UR5-ish, distal 8 cm extras)."""
+    """UR5-ish sketch lengths. Extra DoF past 6 get 8 cm distal links."""
     if dof <= 0:
         return []
     if dof <= len(_BASE_LINKS):
@@ -39,7 +38,7 @@ def link_lengths_for_dof(dof: int) -> list[float]:
 
 
 def fk_skeleton(joints: list[float]) -> list[list[float]]:
-    """Return waypoints ``[origin, base, j1, …, jN]`` in robot XYZ (Z-up)."""
+    """Sketch waypoints [origin, base, j1, …, jN], robot XYZ, Z-up."""
     dof = len(joints)
     if dof == 0:
         return [[0.0, 0.0, 0.0], [0.0, 0.0, _BASE_LIFT]]
@@ -67,17 +66,17 @@ def fk_skeleton(joints: list[float]) -> list[list[float]]:
 
 
 def ee_of(joints: list[float]) -> list[float]:
-    """End-effector XYZ of the yaw/pitch sketch skeleton."""
+    """EE of the yaw/pitch sketch — last point of fk_skeleton."""
     return fk_skeleton(joints)[-1]
 
 
 def shadow_polyline(joint_samples: list[list[float]]) -> list[list[float]]:
-    """End-effector XYZ for each joint-space shadow sample."""
+    """EE XYZ per shadow sample. Empty samples are skipped."""
     return [ee_of(sample) for sample in joint_samples if sample]
 
 
 def zones_for(ontology_ids: list[str]) -> list[dict]:
-    """Static demo obstacle plus extra AABBs when semantic rules fire."""
+    """Demo table box, plus extra AABBs when SEM.* ids fire."""
     zones = [dict(z) for z in DEFAULT_ZONES]
     triggered = set(ontology_ids)
     if "SEM.HEAT_SOURCE" in triggered:
@@ -117,7 +116,7 @@ _SYNTH_RADIUS = 0.045
 
 
 def default_urdf_for_dof(dof: int) -> tuple[Path, str, str] | None:
-    """Bundled URDF path plus root/EE link names for 6-DoF UR5 or 7-DoF Panda."""
+    """Bundled UR5 (6) or Panda (7). Path + root + EE link names, or None."""
     if dof == 6 and UR5_URDF.is_file():
         return UR5_URDF, "base_link", "wrist_3_link"
     if dof == 7 and PANDA_URDF.is_file():
@@ -151,10 +150,10 @@ def _eye() -> list[list[float]]:
     ]
 
 
-def _xyz_rpy_matrix(xyz: list[float], rpy: list[float]) -> list[list[float]]:
+def _xyz_rpy_matrix(xyz: list[float], rpy: list[float]) -> list[list[float]]:  # pylint: disable=too-many-locals
     cr, cp, cy = math.cos(rpy[0]), math.cos(rpy[1]), math.cos(rpy[2])
     sr, sp, sy = math.sin(rpy[0]), math.sin(rpy[1]), math.sin(rpy[2])
-    # R = Rz(yaw) * Ry(pitch) * Rx(roll) matches nalgebra from_euler_angles(r,p,y)
+    # R = Rz(yaw) * Ry(pitch) * Rx(roll) — same as nalgebra from_euler_angles(r,p,y)
     r00 = cy * cp
     r01 = cy * sp * sr - sy * cr
     r02 = cy * sp * cr + sy * sr
@@ -197,7 +196,7 @@ class _Joint:
 
 @dataclass
 class UrdfChain:
-    """Serial revolute chain from URDF, evaluated as 4×4 frames (Z-up, metres)."""
+    """Serial revolute chain from a URDF. 4×4 frames, Z-up, metres."""
 
     joints: list[_Joint]
     root: str
@@ -205,11 +204,11 @@ class UrdfChain:
 
     @property
     def dof(self) -> int:
-        """Number of actuated revolute/continuous joints on the chain."""
+        """How many revolute/continuous joints we actually drive."""
         return len(self.joints)
 
     def frames(self, q: list[float]) -> list[tuple[str, list[list[float]]]]:
-        """World poses ``(link, 4×4)`` from root through each child, at ``q``."""
+        """(link, 4×4) from root through each child at q."""
         world = _eye()
         frames = [(self.root, world)]
         n = min(len(q), len(self.joints))
@@ -222,16 +221,16 @@ class UrdfChain:
         return frames
 
     def skeleton(self, q: list[float]) -> list[list[float]]:
-        """Link origins along the chain, including the root."""
+        """Link origins, root first."""
         pts = []
         for _, m in self.frames(q):
             pts.append([m[0][3], m[1][3], m[2][3]])
         return pts
 
-    def link_aabbs(
+    def link_aabbs(  # pylint: disable=too-many-locals
         self, q: list[float], radius: float = _SYNTH_RADIUS
     ) -> list[tuple[str, list[float], list[float]]]:
-        """Conservative world AABBs for each link at configuration ``q``."""
+        """Fat world AABBs per link at q — origin-to-next plus radius."""
         frames = self.frames(q)
         boxes: list[tuple[str, list[float], list[float]]] = []
         for idx, (name, m) in enumerate(frames):
@@ -239,7 +238,7 @@ class UrdfChain:
                 span = self.joints[idx].origin_xyz if idx == 0 else self.joints[idx].origin_xyz
             else:
                 span = [0.06, 0.0, 0.0]
-            # Conservative world AABB: origin + span direction transformed as a point.
+            # origin + next (or span) plus radius. Fat on purpose.
             ox, oy, oz = m[0][3], m[1][3], m[2][3]
             if idx + 1 < len(frames):
                 nxt = frames[idx + 1][1]
@@ -268,7 +267,7 @@ def _chain_between(joints: dict[str, _Joint], root: str, ee: str) -> list[_Joint
 
 @lru_cache(maxsize=8)
 def load_urdf_chain(path: str, root: str, ee: str) -> UrdfChain:
-    """Parse ``path`` and return the revolute chain from ``root`` to ``ee``."""
+    """Revolute/continuous joints from root → ee. Skips fixed/prismatic."""
     tree = ET.parse(path)
     robot = tree.getroot()
     joints: dict[str, _Joint] = {}
@@ -300,7 +299,7 @@ def aabb_intersects(
     b_min: list[float],
     b_max: list[float],
 ) -> bool:
-    """True when axis-aligned boxes ``a`` and ``b`` overlap (inclusive)."""
+    """Inclusive AABB overlap."""
     return (
         a_min[0] <= b_max[0]
         and a_max[0] >= b_min[0]
@@ -312,7 +311,7 @@ def aabb_intersects(
 
 
 def point_in_aabb(p: list[float], bmin: list[float], bmax: list[float]) -> bool:
-    """True when point ``p`` lies inside the inclusive AABB ``[bmin, bmax]``."""
+    """Inclusive point-in-box."""
     return (
         bmin[0] <= p[0] <= bmax[0]
         and bmin[1] <= p[1] <= bmax[1]
@@ -325,10 +324,9 @@ def collision_pairs(
     obstacles: list[dict],
     chain: UrdfChain | None = None,
 ) -> list[tuple[str, str]]:
-    """Return (link, obstacle) pairs whose AABBs overlap.
+    """(link, obstacle) AABB hits.
 
-    Obstacles tagged ``PHY.FORBIDDEN_ZONE`` are skipped here — those are
-    end-effector point checks via :func:`forbidden_zone_hits`.
+    Skip PHY.FORBIDDEN_ZONE here — that's an EE point check in forbidden_zone_hits.
     """
     scene = [o for o in obstacles if o.get("ontology_id") != "PHY.FORBIDDEN_ZONE"]
     if chain is None:
@@ -353,7 +351,7 @@ def forbidden_zone_hits(
     obstacles: list[dict],
     chain: UrdfChain | None = None,
 ) -> list[str]:
-    """Return labels of ``PHY.FORBIDDEN_ZONE`` boxes that contain the EE."""
+    """Labels of PHY.FORBIDDEN_ZONE boxes that contain the EE."""
     zones = [o for o in obstacles if o.get("ontology_id") == "PHY.FORBIDDEN_ZONE"]
     if not zones:
         return []
@@ -370,7 +368,7 @@ def forbidden_zone_hits(
 
 
 def parse_obstacles(raw: object) -> list[dict]:
-    """Accept evaluate-payload obstacle dicts. Empty input → no collision scene."""
+    """Evaluate-payload obstacle dicts. Empty / junk → no collision scene."""
     if not isinstance(raw, list) or not raw:
         return []
     out: list[dict] = []
@@ -395,11 +393,10 @@ def parse_obstacles(raw: object) -> list[dict]:
 def obstacles_as_tuples(
     obstacles: list[dict],
 ) -> list[tuple[str, float, float, float, float, float, float, str]]:
-    """Rows for ``ShieldPipeline.set_obstacles``.
+    """Rows for ShieldPipeline.set_obstacles.
 
-    The trailing ontology id lets Rust apply the same split as
-    :func:`collision_pairs` / :func:`forbidden_zone_hits`: ``PHY.FORBIDDEN_ZONE``
-    boxes are end-effector point checks, everything else is a collision body.
+    Last field is the ontology id so Rust can split like we do: PHY.FORBIDDEN_ZONE
+    is an EE point check, everything else is a collision body.
     """
     rows = []
     for z in obstacles:
@@ -420,7 +417,7 @@ def obstacles_as_tuples(
 
 
 def fk_skeleton_for(joints: list[float], chain: UrdfChain | None = None) -> list[list[float]]:
-    """URDF skeleton when a matching chain exists, else the yaw/pitch sketch."""
+    """URDF skeleton when the chain matches, else the yaw/pitch sketch."""
     if chain is not None and chain.dof == len(joints):
         return chain.skeleton(joints)
     spec = default_urdf_for_dof(len(joints))

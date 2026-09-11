@@ -1,5 +1,5 @@
-//! Channel-friendly action / decision types that mirror `vla_shield_msgs`
-//! without requiring a ROS 2 overlay.
+//! Channel-friendly action / decision types. Same shape as `vla_shield_msgs`
+//! without needing a ROS overlay.
 
 use shield_core::action::ActionVector;
 use shield_core::arbiter::{ArbiterDecision, ArbiterReason, SemanticRiskReport};
@@ -9,7 +9,7 @@ use shield_core::types::{Aabb, JointLimits};
 
 use crate::pipeline::SafetyPipeline;
 
-/// Incoming VLA command (ROS `ActionProposal` analogue).
+/// Incoming VLA command. Same shape as ROS `ActionProposal`.
 #[derive(Debug, Clone)]
 pub struct ActionProposal {
     pub sequence_id: u64,
@@ -18,11 +18,11 @@ pub struct ActionProposal {
     pub current_joints: Vec<f64>,
 }
 
-/// Outgoing verdict (ROS `SafetyDecision` analogue).
+/// Outgoing verdict. Same shape as ROS `SafetyDecision`.
 #[derive(Debug, Clone)]
 pub struct SafetyDecision {
     pub sequence_id: u64,
-    /// 0=PASS 1=BLOCK 2=CLAMP 3=WARN
+    /// 0=PASS 1=BLOCK 2=CLAMP 3=WARN — don't max() these, WARN would win.
     pub decision: u8,
     pub ontology_ids: Vec<String>,
     pub risk_score: f32,
@@ -45,7 +45,7 @@ impl SafetyDecision {
     }
 }
 
-/// Build a scene graph from named AABBs (base frame).
+/// Named AABBs → scene graph, base frame.
 pub fn scene_from_aabbs(obstacles: &[(String, Aabb)]) -> SceneGraph {
     SceneGraph {
         frame_id: "base_link".into(),
@@ -71,8 +71,8 @@ pub fn scene_from_aabbs(obstacles: &[(String, Aabb)]) -> SceneGraph {
 
 pub fn classify_reasons(reasons: &[ArbiterReason]) -> u8 {
     // Numeric ROS constants are PASS=0 BLOCK=1 CLAMP=2 WARN=3, so we cannot
-    // take max() — WARN would outrank BLOCK. Use the same precedence as
-    // RuleRegistry: block > clamp > warn > pass.
+    // take max() — WARN would outrank BLOCK. Same precedence as RuleRegistry:
+    // block > clamp > warn > pass.
     let mut block = false;
     let mut clamp = false;
     let mut warn = false;
@@ -104,7 +104,7 @@ pub fn classify_reasons(reasons: &[ArbiterReason]) -> u8 {
 }
 
 impl SafetyPipeline {
-    /// Evaluate one proposal against `limits` + `scene`. Semantic report may be stale.
+    /// One proposal vs `limits` + `scene`. Semantic report may be stale — that's ok.
     pub fn evaluate_proposal(
         &self,
         proposal: &ActionProposal,
@@ -217,7 +217,7 @@ mod tests {
         let out = pipe
             .clamped_action(&action, &[0.0], &lim, &SceneGraph::default())
             .expect("projector accepts the state");
-        // A plain velocity_max clamp would emit 1.0 rad/s and overshoot.
+        // A plain velocity_max clamp would emit 1.0 rad/s and overshoot the stop.
         assert!(
             out[0] as f64 * dt <= 0.001 + 1e-9,
             "clamped action {out:?} drives past position_max"

@@ -27,6 +27,7 @@ export default function EventTimeline() {
               >
                 <div className="flex items-center justify-between gap-2">
                   <span className="text-gray-500">
+                    {/* backend sends ns; Date wants ms */}
                     {new Date(entry.ts / 1e6).toLocaleTimeString()}
                   </span>
                   <span className="flex items-center gap-2">

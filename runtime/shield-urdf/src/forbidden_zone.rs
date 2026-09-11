@@ -1,6 +1,6 @@
-//! Axis-aligned forbidden zones in Cartesian space (base or world frame).
+//! Axis-aligned no-go boxes in Cartesian space (base or world).
 
-/// Axis-aligned box `[min, max]` per axis.
+/// Axis-aligned box, `[min, max]` per axis.
 #[derive(Debug, Clone)]
 pub struct AxisAlignedBox {
     pub min: [f64; 3],
@@ -13,7 +13,7 @@ impl AxisAlignedBox {
     }
 }
 
-/// True if point lies inside the closed AABB.
+/// Closed AABB: on the face still counts as inside.
 pub fn point_in_aabb(p: &[f64; 3], b: &AxisAlignedBox) -> bool {
     p[0] >= b.min[0]
         && p[0] <= b.max[0]

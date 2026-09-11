@@ -1,10 +1,10 @@
-//! World-frame validation using a `world -> base_link` isometry (tf2-style).
+//! World-frame check using a `world → base_link` isometry (tf2-style).
 
 use nalgebra::{Isometry3, Point3};
 use shield_urdf::AxisAlignedBox;
 
-/// Applies `world_from_base` so forbidden regions defined in **world** coordinates
-/// can be checked against end-effector pose expressed in **base**.
+/// Forbidden boxes live in **world**. EE pose is in **base**. This applies
+/// `world_from_base` so the two can actually meet.
 #[derive(Debug, Clone)]
 pub struct Tf2Validator {
     pub world_from_base: Isometry3<f64>,
@@ -19,14 +19,14 @@ impl Tf2Validator {
         }
     }
 
-    /// Transform a point from base frame to world frame.
+    /// Base-frame point → world.
     pub fn ee_in_world(&self, ee_base: &[f64; 3]) -> [f64; 3] {
         let p = Point3::new(ee_base[0], ee_base[1], ee_base[2]);
         let pw = self.world_from_base.transform_point(&p);
         [pw.x, pw.y, pw.z]
     }
 
-    /// True if the EE position (base frame) lies inside any forbidden AABB in world frame.
+    /// True if the EE (base frame) sits inside any world-frame no-go box.
     pub fn violates_forbidden_world(&self, ee_base: &[f64; 3]) -> bool {
         let w = self.ee_in_world(ee_base);
         self.forbidden_in_world.iter().any(|b| b.contains(&w))

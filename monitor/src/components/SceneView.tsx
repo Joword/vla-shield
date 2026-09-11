@@ -15,6 +15,7 @@ export default function SceneView() {
 
   return (
     <div className="relative w-full h-full bg-black">
+      {/* Slightly above and to the side so the table isn't edge-on. */}
       <Canvas camera={{ position: [2.2, 1.6, 2.2], fov: 50 }}>
         <color attach="background" args={["#0b1220"]} />
         <ambientLight intensity={0.45} />

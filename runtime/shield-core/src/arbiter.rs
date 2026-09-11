@@ -3,7 +3,7 @@ use crate::ontology::{OntologyId, Severity};
 use crate::types::RunMode;
 use serde::{Deserialize, Serialize};
 
-/// Report from the collision precheck module.
+/// Broad-phase result. Empty `pairs` means nothing overlapped.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CollisionReport {
     pub hit: bool,
@@ -18,7 +18,7 @@ pub struct CollisionPair {
     pub min_distance: f64,
 }
 
-/// Report from the semantic risk module.
+/// Semantic snapshot. If `stale` is true, ignore it and stay physics-only.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SemanticRiskReport {
     pub sequence_id: u64,
@@ -38,32 +38,29 @@ impl Default for SemanticRiskReport {
     }
 }
 
-/// Per-stage latency breakdown for structured logging and benchmark analysis.
-///
-/// All fields are in milliseconds. Optional fields are `None` when the
-/// corresponding stage did not run (e.g. `urdf_fk_ms` when no URDF chain is
-/// configured, `shadow_ms` when shadow simulation is disabled).
+/// Per-stage latency in milliseconds. `None` = that stage didn't run
+/// (no URDF → no `urdf_fk_ms`; shadow off → no `shadow_ms`).
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct LatencyBreakdown {
-    /// Time to receive, deserialize, and validate the incoming action vector.
+    /// Deserialize + validate the incoming action.
     pub ingest_ms: f64,
-    /// URDF forward kinematics + singularity manipulability check.
+    /// URDF FK (+ manipulability if we bother).
     pub urdf_fk_ms: Option<f64>,
-    /// Physical projection: joint-limit clamping, forbidden-zone check.
+    /// Clamp joints / check forbidden zones.
     pub physics_ms: f64,
-    /// Broad-phase collision precheck.
+    /// AABB overlap sweep.
     pub collision_ms: f64,
-    /// tf2 world-frame coordinate validation (mobile base or multi-robot).
+    /// World-frame check (mobile base / multi-robot).
     pub tf2_ms: Option<f64>,
-    /// Arbiter decision logic (priority evaluation + reason assembly).
+    /// Rank reasons and pick PASS vs BLOCK.
     pub arbiter_ms: f64,
-    /// Async shadow-path simulation result latency (not on hot path).
+    /// Shadow sim — off the hot path, so this can be stale.
     pub shadow_ms: Option<f64>,
-    /// Wall-clock total from action receipt to decision publish.
+    /// Wall clock, ingest → decision.
     pub total_ms: f64,
 }
 
-/// Final decision from the arbiter.
+/// Pass or block. That's the whole verdict.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "decision", rename_all = "UPPERCASE")]
 pub enum ArbiterDecision {
@@ -95,7 +92,7 @@ impl ArbiterDecision {
     }
 }
 
-/// Structured safety event emitted on every decision (primarily blocks).
+/// One log row per decision. Blocks are the interesting ones.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SafetyEvent {
     pub event_id: String,
@@ -107,7 +104,7 @@ pub struct SafetyEvent {
     pub mode: RunMode,
 }
 
-/// Trait for the central arbiter that combines all reports into a decision.
+/// Smash collision + semantic + extras into one Pass/Block.
 pub trait Arbiter: Send + Sync {
     fn decide(
         &self,

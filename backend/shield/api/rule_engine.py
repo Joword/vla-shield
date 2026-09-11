@@ -1,12 +1,8 @@
-"""Rule registry that turns ``dataset/ontology/rules_*.json`` into a runtime engine.
+"""dataset/ontology/rules_*.json as a lookup.
 
-The runtime evaluator consults this registry to:
-  * decide whether a triggered ontology id should ``block``, ``clamp`` or ``warn``;
-  * pull severity, ``hard_block`` and a human-readable ``explanation_template``;
-  * fill `{placeholder}` slots in the template with live values supplied by the
-    detector code (e.g. joint name, requested vs limit velocity).
-
-The registry is intentionally side-effect free and safe to reuse across requests.
+Evaluator asks us: block vs clamp vs warn, severity, hard_block, and the
+explanation_template with {placeholders} filled in. No I/O after load —
+safe to reuse across requests.
 """
 
 from __future__ import annotations
@@ -19,6 +15,7 @@ from typing import Any, Iterable
 
 @dataclass(frozen=True)
 class Rule:
+    """One row from rules_physical.json / rules_semantic.json."""
     rule_id: str
     trigger_condition: str
     action: str
@@ -29,7 +26,7 @@ class Rule:
     disabled: bool
 
     def render(self, **kwargs: Any) -> str:
-        """Best-effort template render; missing keys degrade gracefully."""
+        """Fill {placeholders}. Missing keys just return the raw template."""
         try:
             return self.explanation_template.format(**kwargs)
         except (KeyError, IndexError, ValueError):
@@ -37,7 +34,7 @@ class Rule:
 
 
 class RuleRegistry:
-    """In-memory registry indexed by ``rule_id``."""
+    """In-memory rules, keyed by rule_id. Disabled rules are dropped at load."""
 
     def __init__(self, rules: Iterable[Rule]) -> None:
         self._rules: dict[str, Rule] = {r.rule_id: r for r in rules if not r.disabled}
@@ -46,28 +43,31 @@ class RuleRegistry:
         return len(self._rules)
 
     def get(self, rule_id: str) -> Rule | None:
+        """None if the id isn't loaded (or was disabled)."""
         return self._rules.get(rule_id)
 
     def render(self, rule_id: str, fallback: str = "", /, **kwargs: Any) -> str:
+        """Fill the explanation_template, or return fallback if the id is unknown."""
         rule = self._rules.get(rule_id)
         if rule is None:
             return fallback
         return rule.render(**kwargs)
 
     def is_hard_block(self, rule_id: str) -> bool:
+        """True when action=block or hard_block is set."""
         rule = self._rules.get(rule_id)
         return bool(rule and (rule.action == "block" or rule.hard_block))
 
     def severity(self, rule_id: str) -> str:
+        """info/low/medium/high/critical. Unknown ids → medium."""
         rule = self._rules.get(rule_id)
         return rule.severity if rule else "medium"
 
     def decide(self, rule_ids: Iterable[str]) -> str:
-        """Collapse triggered rule actions into a single verdict.
+        """One verdict from many rule ids.
 
-        Precedence: any ``block`` / ``hard_block`` → ``BLOCK``; else any
-        ``clamp`` → ``CLAMP``; else any ``warn`` → ``WARN``; else ``PASS``.
-        Unknown ids fail closed (``BLOCK``).
+        Rank is block > clamp > warn > PASS. Unknown ids fail closed (BLOCK).
+        Don't flatten clamp/warn into BLOCK just because something fired.
         """
         rank = 0
         for rid in rule_ids:
@@ -87,6 +87,7 @@ class RuleRegistry:
 
     @classmethod
     def load(cls, ontology_dir: Path) -> "RuleRegistry":
+        """Read rules_physical.json + rules_semantic.json from ontology_dir."""
         entries: list[Rule] = []
         for name in ("rules_physical.json", "rules_semantic.json"):
             path = ontology_dir / name

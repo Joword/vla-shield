@@ -1,14 +1,12 @@
-"""Micro-benchmark: list vs numpy zero-copy paths on `shield_ffi.ShieldPipeline`.
+"""Time list vs numpy zero-copy on ShieldPipeline.
 
-Runs N identical actions through `pipeline.evaluate` (list path) and
-`pipeline.evaluate_numpy` (zero-copy ndarray path), reports p50 / p95 / p99
-per-call wall time, and the median speedup of the numpy path.
-
-Usage::
+Same actions, two paths: evaluate (copies a Python list into Vec) vs
+evaluate_numpy (borrows the ndarray). Prints p50/p95/p99 wall time and how
+much faster numpy is.
 
     python benchmark/bench_zero_copy.py --dof 8 --iters 100000
 
-Requires the Rust extension to be built::
+Needs the Rust extension:
 
     cd runtime/shield-ffi && maturin develop --release
 """
@@ -29,6 +27,7 @@ except ImportError:
 
 
 def _percentile(data: list[float], p: float) -> float:
+    """p-th percentile, p in 0–100. Empty → nan."""
     if not data:
         return float("nan")
     s = sorted(data)
@@ -81,7 +80,7 @@ def main() -> None:
     current_list = [0.0] * args.dof
     current_np = np.zeros(args.dof, dtype=np.float64)
 
-    # Warmup.
+    # Warmup so the first timed calls aren't paying import / cache misses.
     for i in range(64):
         pipeline.evaluate(raw_actions[i % args.iters].tolist(), current_list, t_ns=0, sequence_id=i)
         pipeline.evaluate_numpy(raw_actions[i % args.iters], current_np, t_ns=0, sequence_id=i)
@@ -90,6 +89,7 @@ def main() -> None:
         f"\nshield_ffi zero-copy bench  dof={args.dof}  iters={args.iters}\n"
     )
 
+    # Time each path as a block. Interleaving would mix cache effects.
     list_samples: list[float] = []
     for i in range(args.iters):
         action_list = raw_actions[i].tolist()

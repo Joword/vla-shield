@@ -1,12 +1,14 @@
 import { useEffect, useRef } from "react";
 import { useTelemetryStore } from "@/store/telemetry";
 
+// Cap at 8s so a flapping server doesn't get hammered.
 const BACKOFF_MS = [500, 1000, 2000, 4000, 8000];
 
 export function useTelemetryWs(robotId: string) {
   const update = useTelemetryStore((s) => s.update);
   const setWsStatus = useTelemetryStore((s) => s.setWsStatus);
 
+  // Keep the latest updater without tearing down the socket on every render.
   const updateRef = useRef(update);
   updateRef.current = update;
 
@@ -35,7 +37,7 @@ export function useTelemetryWs(robotId: string) {
           const msg = JSON.parse(event.data);
           updateRef.current(msg);
         } catch {
-          // ignore malformed frames
+          // Junk frame — skip it, don't kill the socket.
         }
       };
 
@@ -56,6 +58,7 @@ export function useTelemetryWs(robotId: string) {
       if (ws && ws.readyState === WebSocket.OPEN) {
         ws.close();
       } else if (ws) {
+        // Drop onclose first or close() would queue another reconnect.
         ws.onclose = null;
         ws.close();
       }

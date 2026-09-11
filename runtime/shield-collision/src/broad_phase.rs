@@ -3,11 +3,11 @@ use shield_core::arbiter::{CollisionPair, CollisionReport};
 use shield_core::types::Aabb;
 use shield_physics::DynProposal;
 
-/// AABB-based broad-phase collision prechecker.
+/// AABB overlap sweep.
 ///
-/// Link volumes come from URDF FK when `CollisionContext::urdf_chain` is set.
-/// Without a chain, a single conservative box is placed at the projected
-/// end-effector (skipped when EE is still the origin placeholder).
+/// Link volumes come from URDF FK when `urdf_chain` is set. No chain? We drop
+/// one conservative box on the projected EE — skipped if EE is still the
+/// origin placeholder (that used to false-hit *and* false-miss).
 pub struct AabbBroadPhase;
 
 impl AabbBroadPhase {
@@ -166,8 +166,8 @@ mod tests {
             ee_position: [0.0, 0.0, 0.0],
             ee_orientation: [0.0, 0.0, 0.0, 1.0],
         };
-        // Origin EE without URDF is ignored (avoids the old joint-as-X false hits
-        // AND false misses). Place EE on the shelf instead.
+        // Origin EE without URDF is ignored — the old joint-as-X trick both
+        // false-hit and false-missed. Put the EE on the shelf instead.
         let proposal_hit = DynProposal {
             ee_position: [0.0, 0.0, 0.1],
             ..proposal

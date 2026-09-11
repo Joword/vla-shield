@@ -1,30 +1,22 @@
-//! Optional CUDA acceleration layer for VLA-Shield.
+//! Optional CUDA clamp. Skip it for a 7-DoF arm.
 //!
-//! Two API tiers are exposed:
+//! Two APIs:
 //!
-//! 1. **Stateless one-shot** — [`clamp_action_cuda`].
-//!    Convenient for tests and ad-hoc calls; allocates / copies / frees per
-//!    invocation, so unsuited for hot-path workloads.
+//! 1. **One-shot** — [`clamp_action_cuda`]. Fine for tests. Allocates /
+//!    copies / frees every call. Don't put this on the hot path.
+//! 2. **Context** — [`CudaCtx`] + [`CudaCtx::clamp_into`]. Owns three device
+//!    buffers, three pinned host buffers, one stream. Reuse it and you skip
+//!    `cudaMalloc` per tick. Independent pipelines don't serialize on the
+//!    default stream.
 //!
-//! 2. **Stateful context** — [`CudaCtx`] + [`CudaCtx::clamp_into`].
-//!    The context owns three cached device buffers, three pinned host
-//!    staging buffers, and one persistent CUDA stream.  Reusing the same
-//!    [`CudaCtx`] across calls eliminates the per-call `cudaMalloc`,
-//!    enables `cudaMemcpyAsync`, and lets independent pipelines avoid
-//!    serialising on the default stream.
-//!
-//! Both tiers share the same C ABI on the C++/CUDA side so the CPU
-//! fallback (compiled when `nvcc` is absent) is fully ABI-compatible —
-//! there is no `#[cfg]` plumbing required at the call site.
+//! Same C ABI on both the real kernel and the CPU stub (no nvcc). Call sites
+//! don't need `#[cfg]`.
 //!
 //! ## Small-n CPU bypass
 //!
-//! Typical VLA arms are 6–14 DoF.  Launching a CUDA kernel plus two
-//! asynchronous H↔D copies for a dozen floats is slower than a scalar
-//! loop.  [`CudaCtx::clamp_into`] therefore stays on the CPU whenever
-//! `n < min_gpu_n` (default [`DEFAULT_MIN_GPU_N`] = 64, overridable via
-//! `SHIELD_CUDA_MIN_GPU_N` or [`CudaCtx::set_min_gpu_n`]).  Set the
-//! threshold to `0` to force the C backend for A/B measurements.
+//! n < 64 stays on CPU — launching a kernel for a 7-DoF arm is slower than
+//! just clamping. Override via `SHIELD_CUDA_MIN_GPU_N` or
+//! [`CudaCtx::set_min_gpu_n`]. Set `0` to force the C backend for A/B.
 
 use std::os::raw::c_void;
 use thiserror::Error;
@@ -72,20 +64,20 @@ pub enum CudaError {
 
 /// Vectors shorter than this skip the GPU / C-ABI hop on the hot path.
 ///
-/// 64 is well above any current serial-arm DoF (6–14) and well below
-/// batched / wide-vector workloads where a kernel starts to pay off.
+/// 64 is way above any serial-arm DoF (6–14) and still below batched /
+/// wide-vector work where a kernel starts to pay.
 pub const DEFAULT_MIN_GPU_N: usize = 64;
 
-/// Which implementation served the last [`CudaCtx::clamp_into`] call.
+/// Which impl served the last [`CudaCtx::clamp_into`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ClampPath {
-    /// In-process scalar loop; no C ABI, no kernel launch.
+    /// In-process scalar loop. No C ABI, no kernel.
     Cpu,
-    /// Crossed into the C backend (real CUDA kernel or CPU stub).
+    /// Went through the C backend (real kernel or CPU stub).
     Backend,
 }
 
-/// Read `SHIELD_CUDA_MIN_GPU_N`, falling back to [`DEFAULT_MIN_GPU_N`].
+/// `SHIELD_CUDA_MIN_GPU_N`, or [`DEFAULT_MIN_GPU_N`] if unset / junk.
 pub fn min_gpu_n_from_env() -> usize {
     match std::env::var("SHIELD_CUDA_MIN_GPU_N") {
         Ok(s) if !s.is_empty() => s.parse().unwrap_or(DEFAULT_MIN_GPU_N),
@@ -94,7 +86,7 @@ pub fn min_gpu_n_from_env() -> usize {
 }
 
 /// Scalar clamp matching `clamp_stub.cpp` and the CUDA kernel:
-/// `out[i]` is `in[i]` clipped to `[-limit[i], limit[i]]`.
+/// `out[i]` = `in[i]` clipped to `[-limit[i], limit[i]]`.
 pub fn clamp_cpu(input: &[f32], limit: &[f32], output: &mut [f32]) {
     debug_assert_eq!(input.len(), limit.len());
     debug_assert!(output.len() >= input.len());
@@ -127,11 +119,10 @@ fn check_lengths(input: &[f32], limit: &[f32], output: &[f32]) -> Result<usize, 
     Ok(input.len())
 }
 
-/// Stateless one-shot clamp — convenient for tests, **not** the hot path.
+/// One-shot clamp. Fine for tests, **not** the hot path.
 ///
-/// Always crosses the C ABI so tests can exercise the compiled backend.
-/// Prefer [`CudaCtx::clamp_into`] on the hot path (it applies the small-n
-/// CPU bypass).
+/// Always crosses the C ABI so tests actually hit the compiled backend.
+/// Hot path wants [`CudaCtx::clamp_into`] (small-n CPU bypass).
 pub fn clamp_action_cuda(input: &[f32], limit: &[f32]) -> Result<Vec<f32>, CudaError> {
     if input.len() != limit.len() {
         return Err(CudaError::DimensionMismatch {
@@ -154,15 +145,13 @@ pub fn clamp_action_cuda(input: &[f32], limit: &[f32]) -> Result<Vec<f32>, CudaE
     Ok(output)
 }
 
-/// Persistent CUDA context owning cached device buffers, pinned host staging
-/// buffers, and a private CUDA stream.
+/// Persistent CUDA ctx: cached device + pinned host buffers + a private stream.
 ///
-/// Designed to be created once per pipeline and reused across every action
-/// evaluation.  Internally, the backend grows its buffers transparently when
-/// a larger `n` arrives.
+/// Create once per pipeline, reuse every tick. Backend grows buffers if a
+/// bigger `n` shows up.
 ///
-/// Safe to send across threads (held behind a `Mutex` in `shield-ffi`) — the
-/// underlying C ABI only mutates its private device/host buffers and stream.
+/// `Send` but not `Sync` — `shield-ffi` holds it behind a `Mutex`. The C ABI
+/// mutates its own buffers/stream.
 pub struct CudaCtx {
     handle: *mut c_void,
     capacity_hint: usize,
@@ -171,15 +160,13 @@ pub struct CudaCtx {
 }
 
 unsafe impl Send for CudaCtx {}
-// Not `Sync`: callers must serialise access (e.g. via Mutex) because
-// `shield_cuda_ctx_clamp` mutates the cached pinned/device buffers.
+// Not `Sync`: callers must serialize (Mutex) because `shield_cuda_ctx_clamp`
+// mutates the cached pinned/device buffers.
 
 impl CudaCtx {
-    /// Create a new context, optionally pre-allocating buffers for `dof`
-    /// floats.  Pass `dof = 0` to defer allocation until the first call.
+    /// New ctx. `dof` pre-allocates that many floats; `0` waits until first use.
     ///
-    /// `min_gpu_n` is taken from `SHIELD_CUDA_MIN_GPU_N` or
-    /// [`DEFAULT_MIN_GPU_N`].
+    /// `min_gpu_n` comes from `SHIELD_CUDA_MIN_GPU_N` or [`DEFAULT_MIN_GPU_N`].
     pub fn new(dof: usize) -> Result<Self, CudaError> {
         let mut handle: *mut c_void = std::ptr::null_mut();
         let code = unsafe { shield_cuda_ctx_create(dof, &mut handle) };
@@ -194,13 +181,13 @@ impl CudaCtx {
         })
     }
 
-    /// Override the small-n bypass threshold.  `0` forces the C backend
-    /// for every non-empty call (used by A/B micro-benchmarks).
+    /// Override the small-n bypass. `0` forces the C backend every non-empty
+    /// call (A/B benches).
     pub fn set_min_gpu_n(&mut self, n: usize) {
         self.min_gpu_n = n;
     }
 
-    /// Builder-style alias of [`Self::set_min_gpu_n`].
+    /// Builder alias of [`Self::set_min_gpu_n`].
     pub fn with_min_gpu_n(mut self, n: usize) -> Self {
         self.min_gpu_n = n;
         self
@@ -210,24 +197,22 @@ impl CudaCtx {
         self.min_gpu_n
     }
 
-    /// Last known buffer capacity hint, in floats.  Mostly informative.
-    /// Unchanged by CPU-bypass calls (device buffers were not touched).
+    /// Last known device-buffer capacity, in floats. Informative.
+    /// CPU-bypass calls don't touch this (device wasn't involved).
     pub fn capacity_hint(&self) -> usize {
         self.capacity_hint
     }
 
-    /// Which path served the most recent [`Self::clamp_into`] call.
+    /// Which path served the last [`Self::clamp_into`].
     pub fn last_path(&self) -> ClampPath {
         self.last_path
     }
 
-    /// Clamp `input` against `limit` and write the result into `output`
-    /// **without allocating**.  All three slices must have the same length.
+    /// Clamp `input` against `limit` into `output`. No alloc. Same length.
     ///
-    /// When `n < min_gpu_n` this is a scalar loop and never crosses into
-    /// C++/CUDA.  Otherwise it reuses the cached device buffers / pinned
-    /// host buffers / stream so the only per-call overhead is two `memcpy`s
-    /// into pinned memory and the asynchronous H↔D transfers themselves.
+    /// n < `min_gpu_n` → scalar loop, never leaves Rust. Otherwise reuse the
+    /// cached buffers/stream; per-call cost is two memcpys into pinned memory
+    /// plus the async H↔D copies.
     pub fn clamp_into(
         &mut self,
         input: &[f32],
@@ -263,8 +248,7 @@ impl CudaCtx {
         Ok(())
     }
 
-    /// Convenience wrapper that returns a freshly-allocated `Vec`.  Prefer
-    /// [`Self::clamp_into`] in hot paths to avoid the allocation.
+    /// Allocates a `Vec`. Hot path wants [`Self::clamp_into`].
     pub fn clamp(&mut self, input: &[f32], limit: &[f32]) -> Result<Vec<f32>, CudaError> {
         let mut out = vec![0.0_f32; input.len()];
         self.clamp_into(input, limit, &mut out)?;
@@ -281,16 +265,16 @@ impl Drop for CudaCtx {
     }
 }
 
-/// Returns whether this build uses the actual CUDA kernel backend.
+/// Did this build actually compile the CUDA kernel?
 pub fn is_cuda_kernel_enabled() -> bool {
     cfg!(has_cuda_kernel)
 }
 
 /// Packed AABB: `[min_x, min_y, min_z]` / `[max_x, max_y, max_z]` per box.
 ///
-/// `hits[i] = 1` if link box `i` overlaps any obstacle.  Typical VLA scenes
-/// are a handful of links × a handful of obstacles, so this is a host loop
-/// on both the CUDA and CPU backends (same C ABI).
+/// `hits[i] = 1` if link `i` overlaps any obstacle. Typical VLA scenes are a
+/// handful of links × a handful of obstacles, so this is a host loop on both
+/// backends (same C ABI).
 pub fn aabb_hits(
     link_min: &[[f32; 3]],
     link_max: &[[f32; 3]],
@@ -370,7 +354,7 @@ mod tests {
         assert!((out[0] - 1.0).abs() < 1e-6);
         assert!((out[1] - (-1.5)).abs() < 1e-6);
         assert!((out[2] - 0.2).abs() < 1e-6);
-        // Device capacity is unchanged: we never crossed into the backend.
+        // Device capacity unchanged: we never crossed into the backend.
         assert_eq!(ctx.capacity_hint(), 8);
     }
 
@@ -428,7 +412,7 @@ mod tests {
 
     #[test]
     fn ctx_grows_when_capacity_exceeded() {
-        // Force the backend so capacity_hint tracks device-buffer growth.
+        // Force the backend so capacity_hint actually tracks device-buffer growth.
         let mut ctx = CudaCtx::new(2)
             .expect("ctx_create")
             .with_min_gpu_n(0);

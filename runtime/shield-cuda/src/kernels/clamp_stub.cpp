@@ -1,14 +1,12 @@
-// CPU fallback implementing the same C ABI as the CUDA backend.
-// Compiled only when `nvcc` is unavailable (see build.rs).
+// CPU fallback, same C ABI as the CUDA backend.
+// Compiled only when nvcc isn't usable (see build.rs).
 //
-// Mirrors both API tiers exposed by cuda_host.cpp so call sites do not have
-// to special-case the backend:
-//   * stateless   shield_cuda_clamp
-//   * stateful    shield_cuda_ctx_create / destroy / clamp
+// Mirrors both tiers in cuda_host.cpp so call sites don't branch:
+//   * one-shot    shield_cuda_clamp
+//   * context     shield_cuda_ctx_create / destroy / clamp
 //
-// The "context" here is a tiny header that the Rust side opaquely owns;
-// no device memory is involved, so create/destroy are O(1) and clamp_ctx
-// just defers to the stateless loop.
+// "Context" here is a tiny header the Rust side owns. No device memory,
+// so create/destroy are O(1) and clamp just runs the loop.
 
 #include <stddef.h>
 
@@ -25,7 +23,7 @@ inline int clamp_loop(
     size_t n
 ) {
     if (in == nullptr || lim == nullptr || out == nullptr) {
-        return 1;  // mirrors cudaErrorInvalidValue
+        return 1;  // same code as cudaErrorInvalidValue
     }
     for (size_t i = 0; i < n; ++i) {
         float x = in[i];

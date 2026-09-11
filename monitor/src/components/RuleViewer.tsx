@@ -27,6 +27,7 @@ function RuleRow({
   const [expanded, setExpanded] = useState(active);
 
   useEffect(() => {
+    // Currently firing — pop the row open so you don't have to hunt for it.
     if (active) setExpanded(true);
   }, [active]);
 
@@ -87,7 +88,7 @@ export default function RuleViewer({ activeRuleIds = [] }: RuleViewerProps) {
 
   const displayed = rules.filter((r) => {
     if (filter === "block") return r.action === "block";
-    if (filter === "active") return activeRuleIds.includes(r.rule_id);
+    if (filter === "active") return activeRuleIds.includes(r.rule_id); // firing now, not "enabled"
     return true;
   });
 

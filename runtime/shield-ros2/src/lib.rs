@@ -1,8 +1,5 @@
-//! ROS 2 integration for the shield runtime.
-//!
-//! When the `ros2` feature is disabled (default), the crate exposes a
-//! standalone pipeline that communicates via channels instead of ROS topics.
-//! This allows testing without a ROS 2 installation.
+//! ROS 2 glue. Default build has no ROS — the pipeline talks over channels
+//! so you can test without a distro installed.
 
 pub mod adapter;
 pub mod config;

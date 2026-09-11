@@ -1,7 +1,7 @@
 use redis::AsyncCommands;
 use shield_core::arbiter::ArbiterDecision;
 
-/// Redis client for real-time risk scores and telemetry streaming.
+/// Redis: live risk scores + telemetry fan-out.
 pub struct RedisClient {
     client: redis::Client,
 }
@@ -18,7 +18,7 @@ impl RedisClient {
         self.client.get_multiplexed_async_connection().await
     }
 
-    /// Publish the latest risk score (overwrites, 1s TTL).
+    /// Latest risk score. Overwrites, 1s TTL.
     pub async fn set_risk_score(
         &self,
         robot_id: &str,
@@ -30,7 +30,7 @@ impl RedisClient {
         Ok(())
     }
 
-    /// Publish arbiter state hash (5s TTL).
+    /// Arbiter state hash. 5s TTL.
     pub async fn set_arbiter_state(
         &self,
         robot_id: &str,
@@ -49,7 +49,7 @@ impl RedisClient {
         Ok(())
     }
 
-    /// Append a telemetry entry to the Redis stream for WebSocket fan-out.
+    /// Append one telemetry row to the stream for WebSocket fan-out.
     pub async fn publish_telemetry(
         &self,
         robot_id: &str,

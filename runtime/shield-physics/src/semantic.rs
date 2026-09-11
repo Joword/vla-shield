@@ -1,28 +1,21 @@
-//! Semantic constraint mapper: converts SEM.* ontology labels into
-//! deterministic geometric or velocity constraints usable by the projector.
+//! SEM.* labels → boxes / velocity caps the projector can actually enforce.
 //!
-//! # Design
-//!
-//! Semantic risks (e.g. "heat source", "human proximity") are inherently
-//! scene-specific and cannot be encoded in a universal URDF.  This module
-//! bridges the gap by allowing an operator or a VFV result to inject
-//! runtime constraints that are physically comparable to the URDF-derived ones.
-//!
-//! For example, a "heat source detected at (0.4, 0.2, 0.8)" becomes an AABB
-//! exclusion zone around that point; "human proximity" becomes a velocity cap.
+//! "Heat source" isn't in the URDF. An operator (or VFV) injects a box at
+//! runtime; "human nearby" becomes a speed cap. Same shape as the kinematic
+//! constraints, just tagged SEM.* so BLOCK still beats CLAMP.
 
 use shield_core::ontology::OntologyId;
 use shield_urdf::AxisAlignedBox;
 
-/// A velocity cap constraint derived from a semantic risk node.
+/// EE speed cap from a SEM.* node.
 #[derive(Debug, Clone)]
 pub struct VelocityCapConstraint {
-    /// Maximum allowed EE speed (m/s) while the constraint is active.
+    /// Max EE speed (m/s) while this is live.
     pub max_ee_speed_ms: f64,
     pub source_ontology_id: OntologyId,
 }
 
-/// A Cartesian exclusion zone derived from a semantic annotation.
+/// Cartesian no-go box from a semantic annotation.
 #[derive(Debug, Clone)]
 pub struct SemanticZone {
     pub zone: AxisAlignedBox,
@@ -30,12 +23,12 @@ pub struct SemanticZone {
     pub source_ontology_id: OntologyId,
 }
 
-/// A single semantic constraint that the projector enforces.
+/// One SEM.* constraint the projector actually enforces.
 #[derive(Debug, Clone)]
 pub enum SemanticConstraint {
-    /// Exclude a Cartesian region from the reachable workspace.
+    /// Keep the EE out of this box.
     ExclusionZone(SemanticZone),
-    /// Reduce maximum end-effector velocity while the constraint is active.
+    /// Slow the EE down while this is live.
     VelocityCap(VelocityCapConstraint),
 }
 
@@ -47,7 +40,7 @@ impl SemanticConstraint {
         }
     }
 
-    /// Build an exclusion-zone constraint for `SEM.HEAT_SOURCE`.
+    /// `SEM.HEAT_SOURCE` box around `center`.
     pub fn heat_source_zone(center: [f64; 3], radius: f64) -> Self {
         let zone = AxisAlignedBox {
             min: [center[0] - radius, center[1] - radius, center[2] - radius],
@@ -60,7 +53,7 @@ impl SemanticConstraint {
         })
     }
 
-    /// Build an exclusion-zone constraint for `SEM.FORBIDDEN_REGION`.
+    /// `SEM.FORBIDDEN_REGION` — operator-drawn no-go.
     pub fn forbidden_region(zone: AxisAlignedBox, label: impl Into<String>) -> Self {
         SemanticConstraint::ExclusionZone(SemanticZone {
             zone,
@@ -69,7 +62,7 @@ impl SemanticConstraint {
         })
     }
 
-    /// Build a velocity-cap constraint for `SEM.HUMAN_PROXIMITY`.
+    /// `SEM.HUMAN_PROXIMITY` speed cap.
     pub fn human_proximity_cap(max_ee_speed_ms: f64) -> Self {
         SemanticConstraint::VelocityCap(VelocityCapConstraint {
             max_ee_speed_ms,
@@ -77,7 +70,7 @@ impl SemanticConstraint {
         })
     }
 
-    /// Build an exclusion-zone constraint for `SEM.LIQUID_ELECTRICAL`.
+    /// `SEM.LIQUID_ELECTRICAL` box. Don't drip on the electronics.
     pub fn liquid_electrical_zone(zone: AxisAlignedBox, label: impl Into<String>) -> Self {
         SemanticConstraint::ExclusionZone(SemanticZone {
             zone,
@@ -87,7 +80,7 @@ impl SemanticConstraint {
     }
 }
 
-/// Maps a slice of `SemanticConstraint`s into extraction helpers for the projector.
+/// Helpers to pull boxes / caps out of a constraint slice.
 pub struct SemanticConstraintMapper<'a> {
     constraints: &'a [SemanticConstraint],
 }
@@ -97,7 +90,7 @@ impl<'a> SemanticConstraintMapper<'a> {
         SemanticConstraintMapper { constraints }
     }
 
-    /// Collect all active exclusion zones as `AxisAlignedBox` references.
+    /// Live exclusion boxes + the ontology id that put them there.
     pub fn exclusion_zones(&self) -> Vec<(&AxisAlignedBox, &OntologyId)> {
         self.constraints
             .iter()
@@ -110,8 +103,7 @@ impl<'a> SemanticConstraintMapper<'a> {
             .collect()
     }
 
-    /// Return the most restrictive velocity cap across all active constraints.
-    /// Returns `None` when no velocity caps are active.
+    /// Tightest speed cap, or `None` if nobody asked.
     pub fn effective_velocity_cap(&self) -> Option<f64> {
         self.constraints
             .iter()

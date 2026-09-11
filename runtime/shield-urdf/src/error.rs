@@ -1,4 +1,4 @@
-//! Error types for URDF loading and kinematics.
+//! URDF load / FK errors.
 
 use thiserror::Error;
 

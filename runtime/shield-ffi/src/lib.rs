@@ -1,6 +1,4 @@
-//! `shield-ffi` — PyO3 bridge exposing the VLA-Shield hot-path pipeline to Python.
-//!
-//! # Architecture
+//! PyO3 bridge: Python talks to the hot-path pipeline here.
 //!
 //! ```text
 //! Python VLA model
@@ -10,21 +8,17 @@
 //! PyShieldPipeline.evaluate_numpy(...)    ← zero-copy borrow of ndarray
 //!      │  both share evaluate_impl(&[f32], &[f64], ...)
 //!      ▼
-//! Optional CUDA pre-clamp (small-n stays on CPU; see shield-cuda)
+//! Optional CUDA pre-clamp (n < 64 stays on CPU; see shield-cuda)
 //!      ▼
-//! Rust: KinematicClampProjector → URDF FK AABB broad-phase → inline arbiter
+//! Rust: clamp projector → URDF FK AABB sweep → inline arbiter
 //!      │
 //!      ▼
 //! PyDecision { decision: "PASS"|"BLOCK", reasons: [...], latency: {...} }
 //! ```
 //!
-//! # Copying vs zero-copy
-//!
-//! * **Host zero-copy** is already implemented: `evaluate_numpy` borrows
-//!   contiguous `numpy.ndarray` buffers via PyO3 (`PyReadonlyArray1`).
-//! * **Device zero-copy** (`tensor.data_ptr()` shared with CUDA) is not
-//!   implemented.  Typical VLA DoF (6–14) is below the GPU bypass threshold,
-//!   so a device round-trip would not pay off.
+//! `evaluate_numpy` already borrows contiguous ndarrays (host zero-copy).
+//! Device zero-copy (`tensor.data_ptr()` shared with CUDA) isn't a thing —
+//! 6–14 DoF is below the GPU bypass, so a device round-trip wouldn't pay.
 
 pub mod convert;
 pub mod error;
@@ -46,19 +40,19 @@ use shield_physics::projection::KinematicClampProjector;
 use shield_physics::{extra_physical_reasons, ontology_for_projection_error, PhysicalProjector, ProjectionContext};
 use shield_urdf::{AxisAlignedBox, UrdfKinematicChain, UrdfRobot};
 
-/// `(id, min_x, min_y, min_z, max_x, max_y, max_z, ontology_id)` as sent from Python.
+/// `(id, min_x, min_y, min_z, max_x, max_y, max_z, ontology_id)` from Python.
 type Obstacle = (String, f64, f64, f64, f64, f64, f64, String);
 
-/// Python-visible decision result.
+/// Python-facing decision.
 #[pyclass(name = "Decision")]
 #[derive(Debug, Clone)]
 pub struct PyDecision {
     #[pyo3(get)]
     pub decision: String,
-    /// List of (ontology_id, detail, score) tuples.
+    /// `(ontology_id, detail, score)` tuples.
     #[pyo3(get)]
     pub reasons: Vec<(String, String, f32)>,
-    /// Latency breakdown as a dict.
+    /// Latency dict (filled by `latency()`).
     pub latency_raw: LatencyBreakdown,
 }
 
@@ -105,7 +99,7 @@ impl From<PyDecisionSummary> for PyDecision {
     }
 }
 
-/// Python-visible shield pipeline.
+/// Python-facing pipeline.
 ///
 /// ```python
 /// from shield_ffi import ShieldPipeline
@@ -129,9 +123,8 @@ impl From<PyDecisionSummary> for PyDecision {
 #[pyclass(name = "ShieldPipeline")]
 pub struct PyShieldPipeline {
     limits: Arc<JointLimits>,
-    /// Pre-computed `velocity_max` cast to f32, matching the dtype consumed
-    /// by the CUDA / CPU clamp backend.  Cached once at construction so we
-    /// do not pay the cast cost on every `evaluate` call.
+    /// `velocity_max` as f32, matching the CUDA/CPU clamp dtype. Cached at
+    /// construction so we don't recast on every `evaluate`.
     #[cfg(feature = "cuda")]
     velocity_max_f32: Arc<Vec<f32>>,
     projector: KinematicClampProjector,
@@ -140,10 +133,9 @@ pub struct PyShieldPipeline {
     collision_epsilon: f64,
     urdf_chain: Option<UrdfKinematicChain>,
     scene: Mutex<SceneState>,
-    /// Per-pipeline CUDA context owning cached device buffers, pinned host
-    /// staging buffers, and a private CUDA stream.  Held behind a `Mutex`
-    /// because `clamp_into` mutates the cached buffers and PyO3 invokes
-    /// methods through `&self`.
+    /// Per-pipeline CUDA ctx: cached device + pinned host buffers + a private
+    /// stream. Behind a `Mutex` because `clamp_into` mutates those buffers and
+    /// PyO3 calls us through `&self`.
     #[cfg(feature = "cuda")]
     cuda_ctx: Mutex<CudaCtx>,
 }
@@ -218,21 +210,12 @@ impl PyShieldPipeline {
         })
     }
 
-    /// Evaluate a single action vector.  Returns a `Decision` object.
+    /// One action in, a `Decision` out.
     ///
-    /// Parameters
-    /// ----------
-    /// action : list[float] | numpy.ndarray[float32]
-    ///     Raw VLA action vector (joint-space velocities by default).
-    ///     Lists are converted to a `Vec<f32>` by PyO3 (one allocation, scalar
-    ///     iteration).  Prefer :py:meth:`evaluate_numpy` when the caller
-    ///     already holds a contiguous `numpy.ndarray` to avoid that copy.
-    /// current_joints : list[float] | numpy.ndarray[float64]
-    ///     Current joint positions in radians.
-    /// t_ns : int
-    ///     Action timestamp in nanoseconds.
-    /// sequence_id : int
-    ///     Monotonic per-robot action counter.
+    /// `action` is the raw VLA command (joint vel by default). A Python list
+    /// becomes a `Vec<f32>` (one alloc). If you already have a contiguous
+    /// ndarray, use `evaluate_numpy` and skip that copy.
+    /// `current_joints` in rad. `t_ns` / `sequence_id` are just stamped on.
     #[pyo3(signature = (action, current_joints, t_ns = 0, sequence_id = 0))]
     fn evaluate(
         &self,
@@ -244,15 +227,11 @@ impl PyShieldPipeline {
         self.evaluate_impl(&action, &current_joints, t_ns, sequence_id)
     }
 
-    /// Zero-copy evaluate that borrows directly from contiguous numpy arrays.
+    /// Zero-copy path: borrows contiguous numpy arrays.
     ///
-    /// Saves the per-call Python list → `Vec` conversion that ``evaluate``
-    /// pays.  Requires both inputs to be **contiguous** ndarrays of the
-    /// expected dtype (``float32`` for ``action``, ``float64`` for
-    /// ``current_joints``); non-contiguous or wrong-dtype inputs raise.
-    ///
-    /// In typical VLA hot paths this saves ~1–3 µs per call (mostly on
-    /// ``current_joints`` which is a 6–14-element f64 list).
+    /// Skips the list → `Vec` copy that `evaluate` pays. Needs contiguous
+    /// `float32` action + `float64` joints; anything else raises.
+    /// On a 6–14 DoF arm that's maybe 1–3 µs, mostly on `current_joints`.
     #[pyo3(signature = (action, current_joints, t_ns = 0, sequence_id = 0))]
     fn evaluate_numpy(
         &self,
@@ -275,9 +254,8 @@ impl PyShieldPipeline {
     }
 
     /// Replace scene obstacles. Each tuple is
-    /// ``(id, min_x, min_y, min_z, max_x, max_y, max_z, ontology_id)``.
-    /// ``PHY.FORBIDDEN_ZONE`` entries become end-effector zone checks;
-    /// any other ontology id becomes a collision body.
+    /// `(id, min_x, min_y, min_z, max_x, max_y, max_z, ontology_id)`.
+    /// `PHY.FORBIDDEN_ZONE` → EE point check; anything else → collision body.
     fn set_obstacles(&self, obstacles: Vec<Obstacle>) -> PyResult<()> {
         let mut scene = self
             .scene
@@ -287,7 +265,7 @@ impl PyShieldPipeline {
         Ok(())
     }
 
-    /// Cartesian skeleton (root → EE) from the loaded URDF, or empty if none.
+    /// Cartesian skeleton root → EE. Empty if no URDF loaded.
     fn skeleton(&self, joints: Vec<f64>) -> PyResult<Vec<Vec<f64>>> {
         let Some(chain) = &self.urdf_chain else {
             return Ok(vec![]);
@@ -309,14 +287,11 @@ impl PyShieldPipeline {
 }
 
 impl PyShieldPipeline {
-    /// Backend evaluation routine shared by `evaluate` and `evaluate_numpy`.
+    /// Shared guts of `evaluate` / `evaluate_numpy`.
     ///
-    /// * `action_in`     – raw, **unclamped** action commanded by the VLA.
-    /// * `current_joints`– current joint positions used for one-step projection.
-    ///
-    /// Pre-detection runs on the unclamped input so the arbiter can surface
-    /// `PHY.VELOCITY_LIMIT` / `PHY.JOINT_LIMIT` even when the CUDA pre-clamp
-    /// silently truncates the raw command.
+    /// `action_in` is the **raw** unclamped VLA command. Pre-detection runs on
+    /// that so we can still surface `PHY.VELOCITY_LIMIT` / `PHY.JOINT_LIMIT`
+    /// after CUDA silently truncates the copy downstream.
     fn evaluate_impl(
         &self,
         action_in: &[f32],
@@ -329,12 +304,11 @@ impl PyShieldPipeline {
         let t0 = Instant::now();
         let ndof = self.limits.names.len();
 
-        // Working copy of the action that downstream stages will see; starts
-        // as a verbatim copy of the raw input and is overwritten by the CUDA
-        // pre-clamp when that feature is active.  CudaCtx skips the GPU for
-        // n < min_gpu_n (default 64), so 6–14 DoF arms stay on a scalar loop.
-        // Keeping the original `action_in` alive lets pre-detection observe
-        // the *unclamped* values.
+        // Working copy for downstream. Starts as a clone of the raw command;
+        // CUDA pre-clamp overwrites it when that feature is on. CudaCtx skips
+        // the GPU for n < min_gpu_n (default 64), so 6–14 DoF arms stay on a
+        // scalar loop. Keep `action_in` around so pre-detection sees unclamped
+        // values.
         let mut action_clamped: Vec<f32> = action_in.to_vec();
 
         #[cfg(feature = "cuda")]
@@ -350,8 +324,8 @@ impl PyShieldPipeline {
             }
         }
 
-        // Pre-detection on the UNCLAMPED action so VELOCITY_LIMIT / JOINT_LIMIT
-        // reasons are not hidden by the CUDA pre-clamp.
+        // Pre-detect on the UNCLAMPED action so VELOCITY_LIMIT / JOINT_LIMIT
+        // don't get hidden by the CUDA pre-clamp.
         let mut pre_reasons: Vec<ArbiterReason> = Vec::new();
         if action_in.len() == ndof && current_joints.len() == ndof {
             for i in 0..ndof {
@@ -404,8 +378,8 @@ impl PyShieldPipeline {
         let proposal = self.projector.project(&proj_ctx, &av);
         let physics_ms = physics_start.elapsed().as_secs_f64() * 1000.0;
 
-        // FK for the collision boxes runs once here so its cost is reported
-        // separately instead of hiding inside `collision_ms`.
+        // FK for collision boxes runs once here so we can report its cost
+        // instead of stuffing it into `collision_ms`.
         let mut urdf_fk_ms = None;
         let link_boxes = match (&proposal, self.urdf_chain.as_ref()) {
             (Ok(p), Some(chain)) => {
@@ -449,8 +423,8 @@ impl PyShieldPipeline {
                 });
             }
         }
-        // Propagate physics projection errors with a real ontology id, then
-        // layer singularity / tip-over / overload on the (projected or current) state.
+        // Don't slam projection errors into JOINT_LIMIT. Keep the real id so
+        // BLOCK still beats CLAMP, then layer singularity / tip-over / overload.
         if let Err(ref e) = proposal {
             let oid = ontology_for_projection_error(&e.to_string());
             let already = reasons.iter().any(|r| r.ontology_id == oid);
@@ -505,9 +479,9 @@ impl PyShieldPipeline {
     }
 }
 
-/// Obstacles split by ontology: `PHY.FORBIDDEN_ZONE` boxes are end-effector
-/// point checks in the projector, everything else is a collision body.
-/// Keeping both in one lock keeps the two views consistent per evaluation.
+/// Split obstacles by ontology: `PHY.FORBIDDEN_ZONE` is an EE point check in
+/// the projector; everything else is a collision body. One lock so both views
+/// stay consistent per evaluate.
 struct SceneState {
     scene: SceneGraph,
     forbidden: Vec<AxisAlignedBox>,
@@ -585,7 +559,7 @@ fn leaf_link(robot: &UrdfRobot) -> Option<String> {
     leaves.into_iter().next()
 }
 
-/// Register the module with Python.
+/// Wire the classes into the Python module.
 #[pymodule]
 fn shield_ffi(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<PyShieldPipeline>()?;

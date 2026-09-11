@@ -1,4 +1,4 @@
-"""FastAPI application: REST + WebSocket endpoints for VLA-Shield ops."""
+"""REST + WebSocket. Dashboard and /v1/evaluate hit this."""
 
 from __future__ import annotations
 
@@ -24,6 +24,7 @@ ONTOLOGY_DIR = REPO_ROOT / "dataset" / "ontology"
 
 
 def load_rules(domain: str | None = None) -> list[dict]:
+    """PHY + SEM rule dicts. domain=physical|semantic filters the prefix."""
     files = [
         ONTOLOGY_DIR / "rules_physical.json",
         ONTOLOGY_DIR / "rules_semantic.json",
@@ -40,7 +41,7 @@ def load_rules(domain: str | None = None) -> list[dict]:
 
 
 def _decode_image(raw: object) -> np.ndarray | None:
-    """Accept a base64 data-URL / raw base64 PNG/JPEG, or an HWC uint8 nested list."""
+    """Base64 data-URL, raw PNG/JPEG, or an HWC uint8 nested list. Else None."""
     if raw is None:
         return None
     if isinstance(raw, list):
@@ -56,16 +57,18 @@ def _decode_image(raw: object) -> np.ndarray | None:
 
         img = Image.open(io.BytesIO(base64.b64decode(payload))).convert("RGB")
         return np.asarray(img, dtype=np.uint8)
-    except Exception:
+    except (OSError, ValueError, TypeError):
         return None
 
 
 @asynccontextmanager
 async def lifespan(fastapi_app: FastAPI) -> AsyncGenerator[None, None]:
+    """Redis always; MySQL is optional so pytest can skip the DB."""
     fastapi_app.state.redis = await get_redis()
     try:
         fastapi_app.state.mysql = await get_mysql_pool()
-    except Exception as exc:  # pragma: no cover — optional in dev/tests
+    except Exception as exc:  # pylint: disable=broad-exception-caught
+        # Dev/tests often have no MySQL. Don't take the API down with it.
         fastapi_app.state.mysql = None
         fastapi_app.state.mysql_init_error = str(exc)
     fastapi_app.state.evaluator = ShieldEvaluator()
@@ -76,7 +79,7 @@ async def lifespan(fastapi_app: FastAPI) -> AsyncGenerator[None, None]:
         if redis_client is not None:
             try:
                 await redis_client.aclose()
-            except AttributeError:  # very old redis-py
+            except AttributeError:  # old redis-py has .close(), not .aclose()
                 redis_client.close()  # type: ignore[union-attr]
         mysql_pool = getattr(fastapi_app.state, "mysql", None)
         if mysql_pool is not None:
@@ -102,12 +105,18 @@ app.add_middleware(
 
 
 @app.get("/v1/rules")
-async def list_rules(domain: str | None = Query(default=None, pattern="^(physical|semantic)$")) -> dict:
+async def list_rules(
+    domain: str | None = Query(default=None, pattern="^(physical|semantic)$"),
+) -> dict:
+    """Ontology rules for the dashboard. Optional physical|semantic filter."""
     return {"rules": load_rules(domain)}
 
 
 @app.post("/v1/evaluate")
-async def evaluate_action(payload: dict = Body(default_factory=dict)) -> dict:
+async def evaluate_action(  # pylint: disable=too-many-locals
+    payload: dict = Body(default_factory=dict),
+) -> dict:
+    """Run the shield on one action. Writes Redis risk + telemetry stream."""
     robot_id = str(payload.get("robot_id", "default-robot"))
     action = [float(v) for v in payload.get("action", [])]
     if not action:
@@ -137,7 +146,7 @@ async def evaluate_action(payload: dict = Body(default_factory=dict)) -> dict:
         )
     )
 
-    # Keep `/v1/robots/{id}/risk` consistent.
+    # So GET /v1/robots/{id}/risk sees the same decision.
     r: aioredis.Redis = app.state.redis
     arbiter_key = f"arbiter:{robot_id}"
     detail_payload = json.dumps(
@@ -146,7 +155,7 @@ async def evaluate_action(payload: dict = Body(default_factory=dict)) -> dict:
             "latency": result["latency"],
         }
     )
-    # Atomic hset + expire so dashboards never see stale arbiter data.
+    # One pipeline: hset + expire so dashboards never see a stale arbiter hash.
     pipe = r.pipeline(transaction=True)
     pipe.setex(f"risk:{robot_id}", 1, str(result["risk"]))
     pipe.hset(
@@ -159,7 +168,7 @@ async def evaluate_action(payload: dict = Body(default_factory=dict)) -> dict:
     pipe.expire(arbiter_key, 5)
     await pipe.execute()
 
-    # Stream telemetry for the monitor WebSocket.
+    # Push a frame onto the Redis stream the monitor WS tails.
     telemetry = {
         "type": "telemetry",
         "robot_id": robot_id,
@@ -189,7 +198,7 @@ async def evaluate_action(payload: dict = Body(default_factory=dict)) -> dict:
 
 @app.get("/v1/robots/{robot_id}/risk")
 async def get_risk(robot_id: str) -> dict:
-    """Current risk snapshot from Redis."""
+    """Latest risk + arbiter hash from Redis."""
     r: aioredis.Redis = app.state.redis
     score = await r.get(f"risk:{robot_id}")
     arbiter = await r.hgetall(f"arbiter:{robot_id}")
@@ -206,7 +215,7 @@ async def list_events(
     limit: int = Query(default=100, le=1000),
     decision: str | None = Query(default=None, pattern="^(PASS|BLOCK)$"),
 ) -> list[dict]:
-    """List recent safety events from MySQL with optional decision filter."""
+    """Recent safety_events rows. Pass decision=PASS|BLOCK to filter."""
     pool = app.state.mysql
     async with pool.acquire() as conn:
         async with conn.cursor() as cur:
@@ -245,7 +254,7 @@ async def list_events(
 
 @app.get("/v1/robots/{robot_id}/events/{event_id}")
 async def get_event_detail(robot_id: str, event_id: str) -> dict:
-    """Full SafetyEvent payload for a specific event."""
+    """Stored JSON payload for one event."""
     pool = app.state.mysql
     async with pool.acquire() as conn:
         async with conn.cursor() as cur:
@@ -264,7 +273,7 @@ async def list_actions(
     robot_id: str,
     limit: int = Query(default=100, le=1000),
 ) -> list[dict]:
-    """List recent action log entries."""
+    """Recent actions_log rows for this robot."""
     pool = app.state.mysql
     async with pool.acquire() as conn:
         async with conn.cursor() as cur:
@@ -294,7 +303,7 @@ async def list_actions(
 
 @app.websocket("/ws/telemetry/{robot_id}")
 async def telemetry_ws(websocket: WebSocket, robot_id: str) -> None:
-    """Stream real-time telemetry from Redis Streams via WebSocket."""
+    """Tail Redis Streams over WS. last_id starts at $ so we only get new frames."""
     await websocket.accept()
     r: aioredis.Redis = app.state.redis
     stream_key = f"stream:telemetry:{robot_id}"

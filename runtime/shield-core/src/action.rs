@@ -1,19 +1,17 @@
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
-/// Action vector at time `t` in the robot's command space.
-///
-/// The dimensionality is determined by the robot configuration and VLA model.
-/// On the hot path we avoid heap allocation by pre-sizing `data`.
+/// Command at time `t`. Length = robot DoF (or whatever the VLA spit out).
+/// Pre-size `data` on the hot path so we don't realloc every tick.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ActionVector {
-    /// Timestamp in nanoseconds (monotonic clock preferred).
+    /// Timestamp in ns. Prefer a monotonic clock.
     pub t_ns: u64,
-    /// Monotonically increasing per-robot sequence counter.
+    /// Per-robot seq. Must go up.
     pub sequence_id: u64,
-    /// Raw action data (joint deltas, EE deltas, or normalized VLA output).
+    /// The numbers. Joint vel, EE delta, or whatever the model emits.
     pub data: Vec<f32>,
-    /// Identifier of the model that produced this action.
+    /// Which model produced this. Empty is fine.
     #[serde(default)]
     pub model_id: String,
 }
@@ -32,7 +30,7 @@ impl ActionVector {
         self.data.len()
     }
 
-    /// SHA-256 hash of the raw data bytes for dedup / integrity.
+    /// SHA-256 of the payload bytes. Dedup / integrity, not a security boundary.
     pub fn hash_hex(&self) -> String {
         let bytes: Vec<u8> = self
             .data

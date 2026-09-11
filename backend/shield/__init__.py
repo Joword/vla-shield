@@ -1,3 +1,3 @@
-"""VLA-Shield backend: API gateway, semantic risk inference, and evaluation."""
+"""API, VFV, and eval. Python side of the shield."""
 
 __version__ = "0.5.7"

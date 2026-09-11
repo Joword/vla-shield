@@ -1,4 +1,4 @@
-"""In-process gold-set checks (Python fallback, no FastAPI / Redis)."""
+"""In-process gold set (Python fallback — no FastAPI / Redis)."""
 
 from __future__ import annotations
 
@@ -16,8 +16,8 @@ from shield.api.kinematics import (
 REPO = Path(__file__).resolve().parents[3]
 SCENARIOS = REPO / "dataset" / "scenarios" / "scenarios.jsonl"
 
-# Full 22-row gold set: joint/velocity/collision/forbidden, extra physical
-# checks (singularity / tip-over / overload), and hint-driven VFV.
+# 22-row gold set: joint/velocity/collision/forbidden, extra physical
+# (singularity / tip-over / overload), plus hint-driven VFV.
 
 
 def _load() -> list[dict]:
@@ -30,6 +30,7 @@ def _load() -> list[dict]:
 
 
 def test_phy008_urdf_aabb_hits_bin() -> None:
+    """PHY-008: UR5 link AABB overlaps the bin at that q."""
     spec = default_urdf_for_dof(6)
     assert spec is not None
     chain = load_urdf_chain(str(spec[0]), spec[1], spec[2])
@@ -40,6 +41,7 @@ def test_phy008_urdf_aabb_hits_bin() -> None:
 
 
 def test_evaluator_gold_python_ready() -> None:
+    """All 22 gold rows: decision + risk_tags ⊆ ontology_ids."""
     ev = ShieldEvaluator()
     rows = _load()
     assert len(rows) == 22
@@ -76,6 +78,7 @@ def test_evaluator_gold_python_ready() -> None:
 
 
 def test_forbidden_zone_phy005_shape() -> None:
+    """PHY-005 zone dict is a valid EE point check (must not crash)."""
     spec = default_urdf_for_dof(6)
     assert spec is not None
     chain = load_urdf_chain(str(spec[0]), spec[1], spec[2])
@@ -86,6 +89,6 @@ def test_forbidden_zone_phy005_shape() -> None:
         "max": [0.6, 0.35, 0.85],
         "ontology_id": "PHY.FORBIDDEN_ZONE",
     }
-    # Either the EE is already in the zone or a one-step move toward it
-    # will be caught by the evaluator; the helper must not crash.
+    # EE might already be in the zone, or a one-step move will trip the
+    # evaluator. This helper just must not crash.
     forbidden_zone_hits(q, [zone], chain)

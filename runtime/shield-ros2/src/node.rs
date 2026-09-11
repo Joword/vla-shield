@@ -1,8 +1,5 @@
-//! ROS 2 lifecycle hooks for the shield runtime.
-//!
-//! Full `rclrs` graph wiring (subscriptions to `ActionProposal`, publishers for
-//! `SafetyDecision`) belongs in a ROS 2 overlay. These hooks load the URDF
-//! pipeline on `configure` and only evaluate while `active`.
+//! Lifecycle hooks. Full `rclrs` graph wiring lives in a ROS overlay.
+//! These just load the URDF on `configure` and only evaluate while `active`.
 
 use std::path::PathBuf;
 
@@ -15,11 +12,11 @@ use shield_core::arbiter::SemanticRiskReport;
 use shield_core::scene::SceneGraph;
 use shield_core::types::JointLimits;
 
-/// Ontology id reported while the node is not active. Distinct from
-/// `PHY.COLLISION`: nothing is colliding, the node simply refuses to forward.
+/// Ontology id while the node is not active. Not `PHY.COLLISION` — nothing
+/// is colliding, we just refuse to forward.
 pub const INACTIVE_ONTOLOGY_ID: &str = "SYS.NOT_ACTIVE";
 
-/// Stateful callbacks for a shield ROS 2 node (maps to lifecycle transitions).
+/// Lifecycle callbacks. Maps to configure / activate / deactivate.
 pub struct ShieldLifecycleHooks {
     pub urdf_path: Option<PathBuf>,
     pub root_link: String,
@@ -45,7 +42,7 @@ impl ShieldLifecycleHooks {
         Self::default()
     }
 
-    /// `on_configure`: load URDF, allocate the safety pipeline.
+    /// `on_configure`: load URDF, allocate the pipeline.
     pub fn on_configure(
         &mut self,
         urdf_path: PathBuf,
@@ -72,13 +69,13 @@ impl ShieldLifecycleHooks {
         Ok(())
     }
 
-    /// `on_activate`: arm the safety pipeline and start processing proposals.
+    /// `on_activate`: arm it, start processing.
     pub fn on_activate(&mut self) {
         self.armed = self.pipeline.is_some();
         info!(armed = self.armed, "shield lifecycle: on_activate");
     }
 
-    /// `on_deactivate`: stop forwarding raw VLA commands.
+    /// `on_deactivate`: stop forwarding. Hold the last safe action.
     pub fn on_deactivate(&mut self) {
         self.armed = false;
         info!("shield lifecycle: on_deactivate — hold last safe action");
@@ -88,7 +85,7 @@ impl ShieldLifecycleHooks {
         self.armed
     }
 
-    /// Evaluate a proposal while active. Inactive nodes return BLOCK + zeros.
+    /// Evaluate while active. Inactive → BLOCK + zeros.
     pub fn evaluate(
         &self,
         proposal: &ActionProposal,
@@ -109,7 +106,7 @@ impl ShieldLifecycleHooks {
     }
 }
 
-/// When `ros2` is enabled, call this from your `rclrs` context after `rclrs::init`.
+/// Call this from your `rclrs` context after `rclrs::init` when `ros2` is on.
 #[cfg(feature = "ros2")]
 pub fn log_rclrs_build_stub() {
     tracing::warn!(

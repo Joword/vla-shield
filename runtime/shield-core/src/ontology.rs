@@ -1,7 +1,7 @@
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-/// Stable ontology identifier following `DOMAIN.CODE` pattern (e.g. `PHY.COLLISION`).
+/// Stable id, `DOMAIN.CODE` style — `PHY.COLLISION`, `SEM.HEAT_SOURCE`, etc.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct OntologyId(pub String);
 
@@ -39,7 +39,7 @@ pub enum Severity {
     Critical,
 }
 
-/// A single node in the safety ontology tree.
+/// One node in the ontology tree. `hard_block` means BLOCK, not a suggestion.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct OntologyNode {
     pub id: OntologyId,
@@ -51,7 +51,7 @@ pub struct OntologyNode {
     pub parents: Vec<OntologyId>,
 }
 
-/// Enforcement action for a rule.
+/// What the rule does: hard stop, clamp, or just yell.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum RuleAction {
@@ -60,17 +60,15 @@ pub enum RuleAction {
     Warn,
 }
 
-/// Executable safety rule loaded from `dataset/ontology/rules_*.json`.
+/// One rule from `dataset/ontology/rules_*.json`.
 ///
-/// Each rule maps an ontology node to a deterministic trigger condition, a typed
-/// threshold, and an enforcement action (`block | clamp | warn`).  The
-/// `explanation_template` contains named `{placeholder}` fields that the runtime
-/// fills with live values before logging and dashboard display.
+/// Maps a node to a trigger, a threshold blob, and `block | clamp | warn`.
+/// `{placeholders}` in `explanation_template` get filled in at runtime.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RuleEntry {
     pub rule_id: OntologyId,
     pub trigger_condition: String,
-    /// Free-form threshold parameters (type-tagged JSON object).
+    /// Threshold blob. Shape depends on the rule; it's just JSON.
     pub threshold: Value,
     pub action: RuleAction,
     pub severity: Severity,
@@ -84,19 +82,18 @@ pub struct RuleEntry {
 }
 
 impl RuleEntry {
-    /// Load all rules from a JSON array string (e.g. contents of rules_physical.json).
+    /// Parse a JSON array of rules (the `rules_*.json` files).
     pub fn load_from_str(json: &str) -> Result<Vec<Self>, serde_json::Error> {
         serde_json::from_str(json)
     }
 
-    /// Returns true if this rule should be evaluated for the given platform ID.
-    /// An empty `applies_to` list means the rule applies to all platforms.
+    /// Empty `applies_to` = every platform. Otherwise match the id.
     pub fn applies_to_platform(&self, platform: &str) -> bool {
         self.applies_to.is_empty() || self.applies_to.iter().any(|p| p == platform)
     }
 }
 
-/// Physical safety ontology constants.
+/// PHY.* ids. Don't invent new strings — reuse these.
 pub mod physical {
     use super::OntologyId;
 
@@ -123,7 +120,7 @@ pub mod physical {
     }
 }
 
-/// Semantic safety ontology constants.
+/// SEM.* ids. Same deal: reuse, don't typo a new one.
 pub mod semantic {
     use super::OntologyId;
 

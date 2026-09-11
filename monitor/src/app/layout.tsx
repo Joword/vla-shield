@@ -1,6 +1,7 @@
 import type { Metadata } from "next";
 import "./globals.css";
 
+// Tab title / SEO — not the in-app heading (that's in Header).
 export const metadata: Metadata = {
   title: "VLA-Shield Monitor",
   description: "Real-time safety monitoring console for VLA-Shield runtime",

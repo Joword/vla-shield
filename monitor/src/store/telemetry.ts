@@ -66,7 +66,7 @@ export interface TelemetryMessage {
   zones?: SceneZone[];
 }
 
-const MAX_HISTORY = 300;
+const MAX_HISTORY = 300; // ring-buffer cap so the store doesn't grow forever
 
 function asVec3(p: number[] | undefined | null): Vec3 | null {
   if (!p || p.length < 3) return null;
@@ -130,6 +130,7 @@ export const useTelemetryStore = create<TelemetryState>((set) => ({
         tsNs: msg.ts_ns,
         currentJoints: msg.current_joints ?? state.currentJoints,
         projectedJoints: msg.projected_joints ?? state.projectedJoints,
+        // Pose fields are sticky — a partial frame shouldn't blank the 3D view.
         skeleton: msg.skeleton ? asVec3List(msg.skeleton) : state.skeleton,
         shadowPath: msg.shadow_path ? asVec3List(msg.shadow_path) : state.shadowPath,
         ee: msg.ee ? asVec3(msg.ee) : state.ee,

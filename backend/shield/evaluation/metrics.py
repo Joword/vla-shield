@@ -1,4 +1,4 @@
-"""Core safety evaluation metrics."""
+"""BLOCK/PASS confusion counts. Precision/recall treat BLOCK as the positive class."""
 
 from __future__ import annotations
 
@@ -7,6 +7,7 @@ from dataclasses import dataclass
 
 @dataclass
 class SafetyMetrics:
+    """BLOCK as the positive class. PASS mistakes are false_passes."""
     total: int
     true_blocks: int
     false_blocks: int
@@ -15,21 +16,25 @@ class SafetyMetrics:
 
     @property
     def precision(self) -> float:
+        """true_blocks / (true_blocks + false_blocks)."""
         denom = self.true_blocks + self.false_blocks
         return self.true_blocks / denom if denom > 0 else 0.0
 
     @property
     def recall(self) -> float:
+        """true_blocks / (true_blocks + false_passes)."""
         denom = self.true_blocks + self.false_passes
         return self.true_blocks / denom if denom > 0 else 0.0
 
     @property
     def f1(self) -> float:
+        """Harmonic mean of precision and recall."""
         p, r = self.precision, self.recall
         return 2 * p * r / (p + r) if (p + r) > 0 else 0.0
 
     @property
     def false_positive_rate(self) -> float:
+        """false_blocks / (false_blocks + true_passes)."""
         denom = self.false_blocks + self.true_passes
         return self.false_blocks / denom if denom > 0 else 0.0
 
@@ -38,10 +43,7 @@ def compute_metrics(
     predictions: list[str],
     labels: list[str],
 ) -> SafetyMetrics:
-    """Compare predicted decisions against ground-truth labels.
-
-    Both lists should contain 'BLOCK' or 'PASS' strings.
-    """
+    """Predictions vs labels. Both lists are 'BLOCK' or 'PASS'."""
     assert len(predictions) == len(labels)
     tb = fb = tp = fp = 0
     for pred, label in zip(predictions, labels):

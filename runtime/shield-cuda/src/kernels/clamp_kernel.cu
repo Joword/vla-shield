@@ -1,20 +1,18 @@
-// CUDA kernel for symmetric per-dimension action clamping.
+// Symmetric per-dim clamp kernel.
 //
-// Pure device-side code:
-//   * `clamp_kernel`     – __global__ entry that each thread runs once per element.
-//   * `shield_cuda_launch_clamp` – C-ABI launcher that takes already-on-device
-//                                  pointers and triggers the kernel on the
-//                                  caller's stream.
+// Device-only:
+//   * `clamp_kernel`              – one thread per element
+//   * `shield_cuda_launch_clamp`  – C-ABI launcher; pointers already on device,
+//                                   runs on the caller's stream
 //
-// Host-side memory management (cudaMalloc / cudaMemcpy / cudaFree) lives in the
-// neighbouring `cuda_host.cpp`, so this translation unit only depends on the
-// CUDA runtime headers and contains no allocation logic.
+// Host malloc/memcpy/free lives in `cuda_host.cpp`. This file only needs the
+// CUDA runtime headers.
 //
-// Device syntax (`<<<>>>`, `blockIdx`) is compiled only by nvcc (`__NVCC__`).
-// clangd parses `.cu` as C++ (see /.clangd) and uses the host loop below.
+// `<<<>>>` / `blockIdx` compile under nvcc only (`__NVCC__`). clangd treats
+// `.cu` as C++ (see /.clangd) and takes the host loop below.
 
+#define SHIELD_CUDA_KERNEL_TU
 #include "cuda_runtime_compat.h"
-#include <stddef.h>
 
 static void clamp_one(const float* input, const float* limit, float* output, size_t i) {
     float x = input[i];

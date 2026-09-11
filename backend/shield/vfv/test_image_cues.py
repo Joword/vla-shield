@@ -1,4 +1,4 @@
-"""Image-cue VFV fires on saturated heat-colored frames, not on dummy 4×4."""
+"""Image cues fire on a saturated heat-colored frame, not on the dummy 4×4."""
 
 from __future__ import annotations
 
@@ -9,11 +9,13 @@ from shield.vfv.semantic import SemanticVFVPredictor
 
 
 def test_dummy_image_is_ignored() -> None:
+    """4×4 black frames must not fire SEM.*."""
     img = np.zeros((4, 4, 3), dtype=np.uint8)
-    assert image_cue_scores(img) == {}
+    assert not image_cue_scores(img)
 
 
 def test_red_frame_heatsource() -> None:
+    """Saturated red frame → SEM.HEAT_SOURCE via the image prior."""
     img = np.zeros((64, 64, 3), dtype=np.uint8)
     img[..., 0] = 220
     img[..., 1] = 20

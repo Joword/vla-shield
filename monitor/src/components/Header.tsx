@@ -7,6 +7,7 @@ interface HeaderProps {
   onRobotIdChange: (id: string) => void;
 }
 
+// WS state → badge copy. Labels here are what the header actually shows.
 const STATUS_STYLE: Record<WsStatus, { label: string; className: string }> = {
   connected: {
     label: "live",

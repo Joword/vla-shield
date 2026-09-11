@@ -36,6 +36,7 @@ export default function WhyBlocked({
       </h2>
       <ul className="space-y-2">
         {ontologyIds.map((oid) => {
+          // oid is a rule id when the catalog loaded; otherwise we still show the raw id.
           const rule = byId.get(oid);
           const detail = ontologyDetails[oid];
           const dot = SEVERITY_DOT[rule?.severity ?? ""] ?? "bg-danger";

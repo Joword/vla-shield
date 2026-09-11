@@ -1,17 +1,11 @@
-"""Deterministic semantic VFV: scene hints + optional CLIP.
+"""Semantic VFV: hints first, then image cues, CLIP if you opted in.
 
-This is the production-shaped visual path that the Dummy predictor was
-standing in for:
+- Scene hints / risk_tags / explicit SEM.* ids are the testable signal.
+- Phrases inside those hints can fire the same ids. Don't scan the short
+  task name — a PASS row with task="welding" must not auto-fire HEAT_SOURCE.
+- CLIP only if SHIELD_VFV_CLIP=1. Missing image / failed load → hints still work.
 
-1. **Scene hints** (operator / dataset ``risk_tags`` / explicit ``SEM.*`` ids)
-   are the primary, testable signal.  No model download.
-2. **Keyword phrases** inside those hints (not the short task name) can
-   fire the same ids.
-3. **CLIP** is optional (``SHIELD_VFV_CLIP=1``).  When the image is missing
-   or CLIP cannot load, scoring is skipped and hints still work.
-
-Physical ``PHY.*`` tags are ignored here — they belong to the kinematics
-hot path.
+PHY.* tags are ignored here; that's the kinematics path.
 """
 
 from __future__ import annotations
@@ -25,8 +19,8 @@ from shield.vfv.clip_backend import try_load_clip
 from shield.vfv.image_cues import image_cue_scores
 from shield.vfv.predictor import VFVPredictor, VFVResult
 
-# Phrase lists are matched against *hints*, not against the short task field
-# (so a PASS scenario with task="welding" does not auto-fire HEAT_SOURCE).
+# Match phrases against *hints*, not the short task field
+# (a PASS scenario with task="welding" must not auto-fire HEAT_SOURCE).
 _HINT_PHRASES: dict[str, tuple[str, ...]] = {
     "SEM.HEAT_SOURCE": ("heat source", "heater", "hot plate", "torch", "oven"),
     "SEM.HUMAN_PROXIMITY": ("human", "person", "operator", "pedestrian"),
@@ -41,16 +35,17 @@ _KEYWORD_SCORE = 0.78
 
 
 class SemanticVFVPredictor(VFVPredictor):
-    """Hint-first semantic risk predictor with optional CLIP image scores."""
+    """Hints first. Image cues always-on. CLIP only if loaded."""
 
     def __init__(self, clip_scorer: Callable[[np.ndarray], dict[str, float]] | None = None):
         self._clip = try_load_clip() if clip_scorer is None else clip_scorer
 
     @property
     def backend(self) -> str:
+        """clip if weights loaded, else hints."""
         return "clip" if self._clip is not None else "hints"
 
-    def predict(
+    def predict(  # pylint: disable=too-many-locals
         self,
         image: np.ndarray,
         action: list[float],
@@ -58,7 +53,7 @@ class SemanticVFVPredictor(VFVPredictor):
         current_joints: list[float] | None = None,
         scene_hints: Iterable[str] | None = None,
     ) -> VFVResult:
-        del current_joints  # reserved for proximity-from-FK later
+        del current_joints  # later: proximity from FK
         scores: dict[str, float] = {}
         hints = [str(h).strip() for h in (scene_hints or []) if str(h).strip()]
         blob = " ".join(hints).lower()
@@ -83,7 +78,7 @@ class SemanticVFVPredictor(VFVPredictor):
         ):
             try:
                 clip_scores = self._clip(image)
-            except Exception:
+            except (TypeError, ValueError, RuntimeError):
                 clip_scores = {}
             for oid, val in clip_scores.items():
                 if val >= 0.25:
@@ -95,8 +90,8 @@ class SemanticVFVPredictor(VFVPredictor):
             scores[oid] = max(scores.get(oid, 0.0), float(val))
             cue_used = True
 
-        # Human proximity: only warn-level unless EE command is aggressive.
-        # The rule itself is `warn`; leave scoring to the registry.
+        # Drop SEM.HUMAN_PROXIMITY if the arm is basically parked.
+        # The rule is `warn`; leave ranking to the registry.
         if "SEM.HUMAN_PROXIMITY" in scores and action:
             ee_speed = float(max(abs(v) for v in action))
             if ee_speed < 0.05:

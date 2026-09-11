@@ -9,6 +9,8 @@ CompileFlags:
     - -x
     - c++
     - -std=c++17
+    - -DSHIELD_CUDA_KERNEL_TU
+    - -ffreestanding
     - -nocudainc
     - -nocudalib
 
@@ -16,4 +18,9 @@ If:
   PathMatch: .*shield-cuda[/\\]src[/\\]kernels[/\\].*\.(cpp|h)
 CompileFlags:
   Add:
+    - -x
+    - c++
     - -std=c++17
+    - -ffreestanding
+    - -nocudainc
+    - -nocudalib

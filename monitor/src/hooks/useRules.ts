@@ -18,7 +18,7 @@ export function useRules() {
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
-    let cancelled = false;
+    let cancelled = false; // unmount can land before /v1/rules comes back
     async function fetchRules() {
       try {
         const resp = await fetch("/v1/rules");

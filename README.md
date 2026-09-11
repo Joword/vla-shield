@@ -7,129 +7,75 @@
 [![Next.js](https://img.shields.io/badge/Next.js-14-000000?logo=next.js)](https://nextjs.org/)
 [![CUDA](https://img.shields.io/badge/CUDA-optional-76B900?logo=nvidia&logoColor=white)](#cuda-acceleration-layer)
 
-**VLA-Shield** is a model-agnostic, real-time safety filter layer for Vision-Language-Action (VLA) policies. Unlike **training-time** alignment (e.g. SafeVLA-style constraints on the policy), VLA-Shield operates as a **decoupled runtime middleware** that intercepts raw action outputs, projects them into physical dynamics space, and enforces **hard** safety constraints — within a **&lt; 5 ms** hot-path budget — **without modifying** the base VLA model weights.
+**VLA-Shield** is a model-agnostic runtime safety filter for Vision-Language-Action (VLA) policies. It sits after the policy and before the robot: intercept the raw action, project it into kinematics / dynamics, enforce **hard** ontology rules, and emit PASS / CLAMP / BLOCK — without touching model weights.
+
+![Figure 1. VLA-Shield sits between an unchanged VLA policy and the robot / ops stack.](docs/figures/placement.png)
+
+<p align="center"><em>Figure 1. Placement: unchanged policy weights in, PASS / CLAMP / BLOCK out. The &lt; 5&nbsp;ms number is a hot-path budget, not a published latency curve.</em></p>
 
 ---
 
-## What Makes VLA-Shield Different
+## Why this exists
 
-| Approach | Modifies Model? | Latency | Deterministic? | Hardware Requirement |
-|----------|:---------------:|:-------:|:--------------:|:---:|
-| RLHF / DPO alignment | Yes | Training-time | No | Multi-GPU training cluster |
-| SafeVLA (training-time safety) | Yes | Training / inference | No (soft constraints) | Multi-GPU training cluster |
-| Safety-CHORES (arXiv:2503.03480) | Yes (fine-tuning) | Inference-time | No | GPU + retraining |
-| **VLA-Shield (ours)** | **No** | **&lt; 5 ms runtime** | **Yes (URDF + rule engine)** | **CPU is enough; GPU optional** |
+Training-time alignment (RLHF, DPO, SafeVLA) changes the policy. VLA-Shield does not. It is middleware you can put in front of OpenVLA, RT-2, Octo, or Diffusion Policy on a CPU — GPU is optional.
 
-### Project Highlights
+- **Zero-touch on the policy** — no fine-tune, no weight patch, no extra training cluster.
+- **Hard rules, not a hope** — 13 ontology nodes (`PHY.*` × 7, `SEM.*` × 6) with JSON `trigger_condition`, typed `threshold`, and `action ∈ {block, clamp, warn}`.
+- **Hot path vs async priors** — URDF FK, joint / velocity envelopes, AABB, singularity / tip-over / overload run synchronously. Shadow roll-forward and VFV stay off the budget and feed **stale-safe** priors.
+- **Gold set you can rerun** — 22 scenarios in `dataset/scenarios/scenarios.jsonl`; Python fallback currently matches all 22 expected decisions.
+- **Operators see why** — Redis Stream → WebSocket → Next.js monitor (why-blocked, rule table, 3D twin).
 
-- **🧱 Zero-touch on the policy** — slots in front of any VLA (OpenVLA, RT-2, Octo, Diffusion Policy) without a single parameter change.
-- **⚡ Sub-5 ms hot path** — written in Rust with per-stage `LatencyBreakdown` (`ingest / urdf_fk / physics / collision / tf2 / arbiter / shadow / total`) so latency budget violations are observable, not guessed.
-- **📜 Executable safety ontology** — 13 ontology nodes (`PHY.*` × 7, `SEM.*` × 6) backed by JSON rule files (`dataset/ontology/rules_*.json`) carrying `trigger_condition`, typed `threshold`, `action ∈ {block, clamp, warn}`, `severity`, and a `{placeholder}`-driven `explanation_template`. The same JSON is the source of truth for the Rust arbiter, the FastAPI `/v1/rules` endpoint, and the React `RuleViewer`.
-- **🛡️ Hot + Async split** — hard, real-time checks live on the Rust hot path; expensive predictors (VLM-based VFV, multi-step shadow simulation) run asynchronously and feed the arbiter as **stale-safe** priors.
-- **🚀 Multi-tier acceleration** — Python → PyO3 (zero-copy from `numpy.ndarray`) → Rust → optional C++ host layer → CUDA kernel; every hop has one responsibility and the layer above transparently falls back when the layer below is unavailable.
-- **🎮 Per-pipeline CUDA context** — when GPU is enabled, `shield-cuda` holds cached device buffers, pinned host staging buffers, and a private CUDA stream per pipeline; **no `cudaMalloc` ever happens on the hot path**. Vectors shorter than `min_gpu_n` (default 64) **never leave the CPU**, so 6–14 DoF arms skip kernel launch entirely.
-- **🔄 Always-on CPU fallback** — same C ABI on both backends, so the runtime keeps working on machines without `nvcc` (or with `CUDA_DISABLE=1`); a Python evaluator falls back further when even the Rust extension is missing.
-- **🗺️ Real-time 3D digital twin** — Next.js + React monitor renders live action, shadow trajectory, latency stacked bar, why-blocked panel, and active rule set, all driven by a Redis-Stream → WebSocket pipe.
-- **📦 Three deployment targets** — full server stack (Docker Compose), edge Jetson (ARM64 compose), and the bare-metal `cargo build --workspace` path. ROS 2 binding is feature-gated; the runtime can run completely outside a ROS environment.
+| Approach | Modifies model? | When it runs | Deterministic? | Hardware |
+|----------|:---------------:|:------------:|:--------------:|:--------:|
+| RLHF / DPO | Yes | Training | No | Multi-GPU cluster |
+| SafeVLA | Yes | Training / inference | Soft constraints | Multi-GPU cluster |
+| Safety-CHORES | Yes (fine-tune) | Inference | No | GPU + retraining |
+| **VLA-Shield** | **No** | **Runtime (budget &lt; 5 ms)** | **URDF + rule engine** | **CPU; GPU optional** |
 
 ---
 
 ## Architecture
 
-```
-                          ╔══════════════════════════════════════════════════╗
-                          ║                  VLA Policy Model                 ║
-                          ║   OpenVLA · RT-2 · Octo · Diffusion Policy · …    ║
-                          ╚═══════════════════════ │ ═════════════════════════╝
-                                                   │  raw action  (N × DoF)
-                                                   ▼
-                          ┌──────────────────────────────────────────────────┐
-                          │     shield_ffi.ShieldPipeline   (PyO3 bridge)     │
-                          │   • evaluate(list[float])                         │
-                          │   • evaluate_numpy(ndarray)  ← zero-copy hot path │
-                          └─────────────────────── │ ────────────────────────┘
-                                                   │  &[f32], &[f64]
-                                                   ▼
-   ╔═════════════════════════════════════════════════════════════════════════════════╗
-   ║                         ⚡  HOT PATH — Rust (< 5 ms p99)                          ║
-   ║                                                                                 ║
-   ║   ┌──────────────┐   ┌──────────────┐   ┌──────────────┐   ┌──────────────┐    ║
-   ║   │ shield-cuda  │   │ shield-      │   │ shield-      │   │ shield-      │    ║
-   ║   │  (optional)  │   │ physics      │   │ urdf         │   │ collision    │    ║
-   ║   │              │   │              │   │              │   │              │    ║
-   ║   │ pre-clamp    │──▶│ kinematic    │──▶│ FK +         │──▶│ AABB broad   │──┐ ║
-   ║   │ n<64 → CPU   │   │ projector +  │   │ singularity  │   │ phase        │  │ ║
-   ║   │ else GPU ctx │   │ semantic     │   │ + forbidden  │   │ pre-check    │  │ ║
-   ║   │ pinned+stream│   │ constraints  │   │ zones        │   │              │  │ ║
-   ║   └──────────────┘   └──────────────┘   └──────────────┘   └──────────────┘  │ ║
-   ║                                                                              │ ║
-   ║                                ┌─────────────────────────────────────────────┘ ║
-   ║                                ▼                                                ║
-   ║                ┌─────────────────────────────────────────┐                      ║
-   ║                │            Arbiter (rule-driven)         │                      ║
-   ║                │  ┌────────────────────────────────────┐  │                      ║
-   ║                │  │ rules_physical.json + rules_       │  │                      ║
-   ║                │  │ semantic.json  →  PHY.* / SEM.*    │  │                      ║
-   ║                │  │ action ∈ {block | clamp | warn}    │  │                      ║
-   ║                │  │ explanation_template {placeholders}│  │                      ║
-   ║                │  └────────────────────────────────────┘  │                      ║
-   ║                └────────────────────┬────────────────────┘                      ║
-   ╚═════════════════════════════════════ │ ══════════════════════════════════════════╝
-                                          ▼
-                          PASS (clamped action)  ◀───┐    BLOCK (safe fallback)
-                                          │           │            │
-              ┌───────────────────────────┼───────────┴────────────┴───────────┐
-              ▼                           ▼                                    ▼
-   ┌──────────────────┐     ┌──────────────────────┐          ┌──────────────────────┐
-   │ ROS 2 Lifecycle  │     │ Safety Event         │          │ Redis Stream         │
-   │ (Fast-DDS QoS)   │     │ → MySQL audit log    │          │ → WebSocket → UI     │
-   │ activate /       │     │ (event_id, latency,  │          │ (telemetry, latency  │
-   │ deactivate hooks │     │  reasons[], action)  │          │  breakdown, reasons) │
-   └──────────────────┘     └──────────────────────┘          └──────────┬───────────┘
-                                                                          ▼
-                                                          ┌──────────────────────────┐
-                                                          │  Monitor UI              │
-                                                          │  Next.js + React + Three │
-                                                          │  ┌────────────────────┐  │
-                                                          │  │ LatencyChart       │  │
-                                                          │  │ WhyBlocked         │  │
-                                                          │  │ RuleViewer         │  │
-                                                          │  │ SceneView skeleton │  │
-                                                          │  │ + shadow + zones   │  │
-                                                          │  └────────────────────┘  │
-                                                          └──────────────────────────┘
+Runtime is a **filter**, not a second policy. Panel (a) is the stack a command actually walks; panel (b) is the five-stage hot path plus async priors that must not stall it.
 
-   ┌─────────────────────────────────────────────────────────────────────────────────┐
-   │                       ⏳  ASYNC PATH — off the hot-path budget                    │
-   │                                                                                 │
-   │   ┌──────────────────────────────┐         ┌──────────────────────────────┐     │
-   │   │  shield-shadow                │         │  Visual Feedback Verifier    │     │
-   │   │  joint-space roll-forward     │         │  (Python · backend.shield)   │     │
-   │   │  multi-step risk prior        │         │  VLM / CLIP semantic risk    │     │
-   │   │  (JointSpaceSimulator)        │         │  → SEM.* triggers            │     │
-   │   └──────────────────────────────┘         └──────────────────────────────┘     │
-   │                                                                                 │
-   │   Both results are fed back into the arbiter as STALE-SAFE priors —              │
-   │   if the async pass hasn't finished yet, the hot path simply proceeds.           │
-   └─────────────────────────────────────────────────────────────────────────────────┘
-```
+![Figure 2. Runtime architecture: layered stack and five-stage hot path.](docs/figures/architecture.png)
 
-### Layer & Stack
+<p align="center"><em>Figure 2. (a) Layered stack with optional CUDA clamp for n ≥ 64. (b) Clamp → project → FK → collision → decide; shadow / VFV remain stale-safe.</em></p>
 
-| Layer | Crate / Module | Purpose | Tech |
-|---|---|---|---|
-| Python FFI | `shield-ffi` | PyO3 + numpy zero-copy bridge; per-pipeline `Mutex<CudaCtx>` | Rust · PyO3 0.22 · numpy |
-| CUDA acceleration | `shield-cuda` | Rust → C++ host → CUDA kernel; auto CPU fallback | Rust · C++ · CUDA |
-| Domain core | `shield-core` | Ontology, action, arbiter, scene-graph types | Rust |
-| Physics | `shield-physics` | Kinematic projector + semantic constraint mapper | Rust · nalgebra |
-| Kinematics | `shield-urdf` | URDF parse, forward kinematics, forbidden zones | Rust · quick-xml |
-| Collision | `shield-collision` | AABB broad-phase pre-check | Rust |
-| Shadow | `shield-shadow` | Async joint-space roll-forward predictor | Rust |
-| ROS 2 glue | `shield-ros2` | Lifecycle hooks, tf2 validator, pipeline orchestrator | Rust · rclrs (optional) |
-| Storage | `shield-io` | MySQL persistence + Redis Stream telemetry | Rust · sqlx · redis |
-| Backend API | `backend/shield/api` | FastAPI REST + WebSocket; rule engine; evaluator | Python · FastAPI · numpy |
-| VFV | `backend/shield/vfv` | Visual Feedback Verification reference predictor | Python · PyTorch |
-| Monitor | `monitor/` | Real-time 3D digital twin dashboard | Next.js 14 · React · Three.js · Zustand |
+| Layer | Crate / module | Role |
+|---|---|---|
+| Python FFI | `shield-ffi` | PyO3 + numpy zero-copy; per-pipeline CUDA context |
+| CUDA (optional) | `shield-cuda` | Action clamp on GPU; CPU ABI fallback |
+| Domain | `shield-core` | Ontology, action, arbiter |
+| Physics | `shield-physics` | Kinematic projector + PHY.SINGULARITY / TIPOVER / OVERLOAD |
+| Kinematics | `shield-urdf` | URDF parse, FK, forbidden zones |
+| Collision | `shield-collision` | AABB broad-phase |
+| Shadow | `shield-shadow` | Async joint-space roll-forward |
+| ROS 2 | `shield-ros2` | Lifecycle, tf2, pipeline (feature-gated) |
+| Storage | `shield-io` | MySQL audit + Redis telemetry |
+| Backend | `backend/shield/api` | FastAPI + Python evaluator fallback |
+| VFV | `backend/shield/vfv` | Visual semantic risk (off hot path) |
+| Monitor | `monitor/` | Next.js + Three.js digital twin |
+
+---
+
+## Gold set (real counts)
+
+22 rows in `dataset/scenarios/scenarios.jsonl`. Decisions: **BLOCK 13 · CLAMP 1 · WARN 3 · PASS 5**. Families: PHY 8, SEM 6, COMBO 3, PASS 5. All **13** ontology nodes appear at least once. PASS rows exist so false-stop rate is measurable.
+
+![Figure 3. Gold-set coverage from scenarios.jsonl.](docs/figures/gold-set.svg)
+
+<p align="center"><em>Figure 3. Expected-decision mix, scenario family, and ontology coverage. Not a field study; not a latency plot.</em></p>
+
+Python fallback evaluator: **22 / 22** expected decisions in the in-process gold test. Latency vs the 5 ms budget is `benchmark/run_latency.py --use-ffi`, not a figure here.
+
+---
+
+## Monitor
+
+![Figure 4. Safety monitor (concept mock).](docs/figures/monitor.png)
+
+<p align="center"><em>Figure 4. Concept mock of the Next.js console — risk gauge, 3D twin, why-blocked, stacked latency, live rules. Not a live capture from this repo.</em></p>
 
 ---
 
@@ -154,7 +100,7 @@ cargo build -p shield-ros2 --features ros2     # requires ROS 2 + Rust overlay
 ```bash
 cd backend
 pip install -e ".[dev]"
-pytest                                          # 17 tests including /v1/evaluate smoke
+pytest
 ```
 
 ### 3 · Safety monitor (Next.js)
@@ -221,15 +167,10 @@ src/kernels/clamp_kernel.cu CUDA kernel + thin launcher
 | Small-n bypass | `n < min_gpu_n` (default 64) | Rust scalar loop — **no C ABI, no kernel** |
 | Force backend | `SHIELD_CUDA_MIN_GPU_N=0` or `set_min_gpu_n(0)` | C ABI even for tiny `n` (A/B benches) |
 
-Run the built-in micro-benchmark:
-
 ```bash
 cd runtime
-# Typical arm DoF — CPU bypass should beat the GPU hop
 cargo run -p shield-cuda --example bench_clamp --release -- --iters 100000 --dof 8
-# Same DoF, force the C backend for the A/B number
 cargo run -p shield-cuda --example bench_clamp --release -- --iters 100000 --dof 8 --force-gpu
-# Wide vector — backend is allowed by default (n ≥ 64)
 cargo run -p shield-cuda --example bench_clamp --release -- --iters 20000 --dof 256
 ```
 
@@ -237,24 +178,21 @@ cargo run -p shield-cuda --example bench_clamp --release -- --iters 20000 --dof 
 
 ## Benchmarking
 
-Two complementary suites live under `benchmark/`:
-
 ```bash
-# Latency stress-test against the live FastAPI server (HTTP path)
+# Latency against the live FastAPI server (HTTP path)
 python benchmark/run_latency.py --dof 6 --n-actions 10000
 
-# Latency through the Rust FFI directly (skip HTTP), zero-copy numpy by default
+# Latency through the Rust FFI (skip HTTP); numpy zero-copy by default
 python benchmark/run_latency.py --use-ffi --dof 8 --n-actions 50000
-python benchmark/run_latency.py --use-ffi --no-numpy           # A/B vs list path
+python benchmark/run_latency.py --use-ffi --no-numpy
 
 # Safety recall / precision over the 22-scenario gold set
 python benchmark/run_safety.py --scenarios dataset/scenarios/scenarios.jsonl
 
-# Zero-copy vs list-path micro-benchmark on the FFI directly
 python benchmark/bench_zero_copy.py --dof 8 --iters 100000
 ```
 
-`run_latency.py` reports per-stage `p50 / p95 / p99 / mean / max` plus a `budget_violation_rate (> 5 ms)` headline; `run_safety.py` reports `block_recall`, `false_stop_rate`, `hard_block_precision`, and `accuracy`.
+`run_latency.py` reports per-stage `p50 / p95 / p99 / mean / max` plus `budget_violation_rate (> 5 ms)`. `run_safety.py` reports `block_recall`, `false_stop_rate`, `hard_block_precision`, and `accuracy`.
 
 ---
 
@@ -264,73 +202,20 @@ python benchmark/bench_zero_copy.py --dof 8 --iters 100000
 vla-shield/
 ├── README.md
 ├── LICENSE                                  (Apache 2.0)
-│
 ├── runtime/                                 Rust real-time shield runtime
-│   ├── shield-core/                         Ontology, action, arbiter, scene
-│   ├── shield-urdf/                         URDF parse, FK, forbidden zones
-│   ├── shield-physics/                      Kinematic projector + semantic constraints
-│   ├── shield-collision/                    AABB broad-phase pre-check
-│   ├── shield-shadow/                       Async joint-space roll-forward simulator
-│   ├── shield-cuda/                         Optional GPU clamp — kernel + C++ host + CPU stub
-│   ├── shield-ffi/                          PyO3 bridge with numpy zero-copy
-│   ├── shield-ros2/                         ROS 2 lifecycle hooks, tf2, pipeline
-│   └── shield-io/                           MySQL + Redis I/O
-│
-├── backend/                                 Python backend (API + ML + evaluation)
-│   ├── shield/
-│   │   ├── api/
-│   │   │   ├── app.py                       FastAPI REST + WebSocket
-│   │   │   ├── evaluator.py                 Hot-path evaluator (FFI + Py fallback)
-│   │   │   ├── rule_engine.py               RuleRegistry loaded from rules_*.json
-│   │   │   └── deps.py                      Redis + MySQL factories
-│   │   ├── vfv/                             Visual Feedback Verification predictors
-│   │   ├── evaluation/                      Metrics (precision / recall / FPR / F1)
-│   │   ├── data/                            Dataset smoke path + validation
-│   │   └── schemas.py                       Pydantic models (single source of truth)
-│   ├── migrations/                          MySQL DDL + ontology seed
-│   └── tests/                               17 tests (schemas, metrics, /v1/evaluate)
-│
-├── monitor/                                 Real-time safety monitor UI
-│   └── src/
-│       ├── app/                             Next.js App Router
-│       ├── components/
-│       │   ├── LatencyChart.tsx             Stacked-bar + sparkline latency view
-│       │   ├── RuleViewer.tsx               Live rule table fed by /v1/rules
-│       │   ├── WhyBlocked.tsx               Block reasons with trigger + explanation
-│       │   ├── RiskGauge.tsx
-│       │   └── SceneView.tsx                Three.js skeleton + shadow path + zones
-│       ├── hooks/                           WebSocket telemetry hook
-│       └── store/                           Zustand state
-│
-├── ros2/
-│   └── vla_shield_msgs/                     Custom .msg / .srv for ROS 2
-│
+├── backend/                                 FastAPI + Python evaluator + VFV
+├── monitor/                                 Next.js safety console
+├── ros2/vla_shield_msgs/                    Custom .msg / .srv
 ├── dataset/
-│   ├── ontology/
-│   │   ├── physical.json + semantic.json    Ontology node definitions
-│   │   ├── rules_physical.json              7 PHY.* executable rules
-│   │   ├── rules_semantic.json              6 SEM.* executable rules
-│   │   └── rule_schema.json                 JSON Schema for the above
-│   ├── scenarios/
-│   │   ├── scenarios.jsonl                  22 gold scenarios (PHY + SEM + COMBO + PASS)
-│   │   └── scenario_spec.md
-│   ├── red_team/                            Red-team JSONL schema + samples
-│   └── urdf/                                Minimal URDF fixtures for tests
-│
-├── benchmark/
-│   ├── protocol.md                          Metric & methodology spec
-│   ├── run_latency.py                       HTTP / FFI / numpy A·B latency suite
-│   ├── run_safety.py                        22-scenario recall / precision suite
-│   └── bench_zero_copy.py                   list vs numpy FFI micro-bench
-│
+│   ├── ontology/                            PHY.* / SEM.* nodes + executable rules
+│   ├── scenarios/scenarios.jsonl            22 gold scenarios
+│   ├── red_team/                            Red-team JSONL + samples
+│   └── urdf/                                Minimal URDF fixtures
+├── benchmark/                               Latency + gold-set safety suites
 ├── docs/
+│   ├── figures/                             README figures (placement, architecture, gold set, monitor)
 │   └── openapi/shield-ops-v1.yaml           REST + WebSocket schema
-│
-└── deploy/
-    ├── Dockerfile                           Multi-stage (backend + monitor)
-    ├── docker-compose.yml                   MySQL · Redis · API · Monitor
-    ├── .env.example
-    └── edge/                                Jetson-oriented compose + env template
+└── deploy/                                  Docker Compose + Jetson edge stack
 ```
 
 ---
@@ -340,8 +225,6 @@ vla-shield/
 **Manual samples** (`dataset/red_team/samples.jsonl`): bilingual (EN / ZH) entries for smoke testing.
 
 **Scenario gold set** (`dataset/scenarios/scenarios.jsonl`): 22 high-risk scenarios with `injected_action`, `current_joints`, `expected_decision`, and `risk_tags` covering all 13 ontology nodes.
-
-**Initialize a working red-team JSONL from samples:**
 
 ```bash
 cd backend
@@ -364,6 +247,12 @@ python -m shield.data.validate --data ../dataset/red_team/public.jsonl
   howpublished = {\url{https://github.com/Joword/vla-shield}}
 }
 ```
+
+---
+
+## Contributors
+
+- [Joword](https://github.com/Joword)
 
 ---
 

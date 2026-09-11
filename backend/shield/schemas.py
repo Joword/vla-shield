@@ -1,14 +1,17 @@
-"""Pydantic models mirroring Rust core types for Python-side validation."""
+"""Pydantic twins of the Rust types. Validate JSON on the Python side with these."""
 
 from __future__ import annotations
 
 from enum import Enum
 from typing import Any, Optional
 
-from pydantic import BaseModel, Field
+from pydantic.fields import Field
+from pydantic.main import BaseModel
 
 
 class Severity(str, Enum):
+    """info → critical. Same labels as dataset/ontology."""
+
     INFO = "info"
     LOW = "low"
     MEDIUM = "medium"
@@ -17,6 +20,8 @@ class Severity(str, Enum):
 
 
 class RunMode(str, Enum):
+    """Which checks the hot path actually runs."""
+
     PRODUCTION = "production"
     PHYSICS_ONLY = "physics_only"
     MONITOR = "monitor"
@@ -24,6 +29,8 @@ class RunMode(str, Enum):
 
 
 class OntologyNode(BaseModel):
+    """One PHY.* / SEM.* node from physical.json / semantic.json."""
+
     id: str = Field(..., pattern=r"^[A-Z]+\.[A-Z0-9_]+$")
     severity: Severity
     hard_block: bool
@@ -33,13 +40,15 @@ class OntologyNode(BaseModel):
 
 
 class RuleAction(str, Enum):
+    """What the arbiter does when a rule fires."""
+
     BLOCK = "block"
     CLAMP = "clamp"
     WARN = "warn"
 
 
 class RuleEntry(BaseModel):
-    """Executable safety rule loaded from dataset/ontology/rules_*.json."""
+    """One rule from dataset/ontology/rules_*.json."""
 
     rule_id: str = Field(..., pattern=r"^[A-Z]+\.[A-Z0-9_]+$")
     trigger_condition: str = Field(..., min_length=1)
@@ -53,6 +62,8 @@ class RuleEntry(BaseModel):
 
 
 class ActionVector(BaseModel):
+    """One VLA command: timestamp, seq, joint velocities."""
+
     t_ns: int
     sequence_id: int
     data: list[float]
@@ -60,18 +71,24 @@ class ActionVector(BaseModel):
 
 
 class CollisionPair(BaseModel):
+    """One link vs one obstacle from the AABB sweep."""
+
     link: str
     obstacle: str
     min_distance: float
 
 
 class CollisionReport(BaseModel):
+    """Broad-phase result. Empty pairs = nothing overlapped."""
+
     hit: bool
     pairs: list[CollisionPair] = Field(default_factory=list)
     energy_lower_bound: float = 0.0
 
 
 class SemanticRiskReport(BaseModel):
+    """VFV / hint prior. stale=True until an async pass lands."""
+
     sequence_id: int = 0
     risk_score: float = 0.0
     triggered: list[str] = Field(default_factory=list)
@@ -79,12 +96,16 @@ class SemanticRiskReport(BaseModel):
 
 
 class ArbiterReason(BaseModel):
+    """One ontology hit the arbiter ranked."""
+
     ontology_id: str
     detail: str = ""
     score: float = 0.0
 
 
 class LatencyBreakdown(BaseModel):
+    """Per-stage ms. None means that stage didn't run."""
+
     ingest_ms: float = 0.0
     urdf_fk_ms: Optional[float] = None
     physics_ms: float = 0.0
@@ -96,6 +117,8 @@ class LatencyBreakdown(BaseModel):
 
 
 class SafetyEvent(BaseModel):
+    """One audit row: decision + reasons + latency."""
+
     event_id: str
     ts_ns: int
     robot_id: str
@@ -108,7 +131,7 @@ class SafetyEvent(BaseModel):
 
 
 class RedTeamEntry(BaseModel):
-    """Single entry in the red-team dataset (JSONL format)."""
+    """One red-team JSONL row."""
 
     id: str = Field(..., pattern=r"^[a-z]{2}-[a-z0-9]{6}$")
     split: str = Field(default="train", pattern=r"^(train|val|test)$")
@@ -127,7 +150,7 @@ class RedTeamEntry(BaseModel):
 
 
 class TelemetryMessage(BaseModel):
-    """WebSocket telemetry frame sent to dashboard."""
+    """One WS frame the dashboard listens for."""
 
     type: str = "telemetry"
     robot_id: str

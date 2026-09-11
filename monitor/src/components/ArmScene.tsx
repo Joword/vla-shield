@@ -4,7 +4,7 @@ import { Line } from "@react-three/drei";
 import { useTelemetryStore, Vec3, SceneZone } from "@/store/telemetry";
 import { decisionStyle } from "@/lib/decision";
 
-/** Robot Z-up (x, y, z) → Three.js Y-up (x, z, y). */
+/** Robot is Z-up; Three.js is Y-up. Swap y/z or the arm looks like it fell over. */
 function toThree(p: Vec3): Vec3 {
   return [p[0], p[2], p[1]];
 }

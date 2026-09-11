@@ -8,9 +8,8 @@ fn has_nvcc() -> bool {
         .unwrap_or(false)
 }
 
-/// On Windows, `nvcc` needs MSVC `cl.exe` as the host compiler. A lone
-/// CUDA toolkit plus MinGW is not enough — nvcc fails looking for cl.exe
-/// and previously broke the whole workspace build.
+/// On Windows, nvcc wants MSVC `cl.exe`. A CUDA toolkit + MinGW isn't enough —
+/// nvcc looks for cl.exe, fails, and used to take the whole workspace with it.
 fn nvcc_can_compile() -> bool {
     if !has_nvcc() {
         return false;
@@ -36,7 +35,7 @@ fn main() {
     println!("cargo:rerun-if-changed=src/kernels/cuda_host.cpp");
     println!("cargo:rerun-if-changed=src/kernels/clamp_stub.cpp");
     println!("cargo:rerun-if-env-changed=CUDA_DISABLE");
-    // Declare custom cfg flag so rustc 1.80+ does not warn on cfg!(has_cuda_kernel).
+    // Tell rustc 1.80+ that `has_cuda_kernel` is a real cfg, not a typo.
     println!("cargo:rustc-check-cfg=cfg(has_cuda_kernel)");
 
     if std::env::var_os("CUDA_DISABLE").is_some() {
@@ -47,9 +46,9 @@ fn main() {
 
     if nvcc_can_compile() {
         // Two-unit build:
-        //   * clamp_kernel.cu  – pure __global__ kernel (compiled by nvcc as device code)
-        //   * cuda_host.cpp    – C++ host-side glue (cudaMalloc / Memcpy / Free)
-        // Both are passed to nvcc so cudart linkage is set up automatically.
+        //   * clamp_kernel.cu  – __global__ kernel (nvcc, device)
+        //   * cuda_host.cpp    – host glue (cudaMalloc / Memcpy / Free)
+        // Both go through nvcc so cudart linkage just happens.
         let mut build = cc::Build::new();
         build.cuda(true);
         build.cpp(true);

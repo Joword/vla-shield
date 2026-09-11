@@ -1,8 +1,7 @@
-"""Optional CLIP backend for visual semantic scoring.
+"""Optional CLIP scoring.
 
-Loaded only when ``SHIELD_VFV_CLIP=1``.  Missing weights or a failed
-import degrade to ``None`` so the keyword/hint path stays the default
-hot path (no multi-hundred-MB download in tests or CPU-only deploys).
+Only if SHIELD_VFV_CLIP=1. Missing weights / import → None, so hints stay
+the hot path. Don't pull a 300MB model in tests or CPU-only deploys.
 """
 
 from __future__ import annotations
@@ -23,11 +22,12 @@ _PROMPTS: dict[str, str] = {
 
 
 def clip_enabled() -> bool:
+    """SHIELD_VFV_CLIP=1/true/yes."""
     return os.environ.get("SHIELD_VFV_CLIP", "").strip() in {"1", "true", "TRUE", "yes"}
 
 
 def try_load_clip() -> Any | None:
-    """Return a callable ``score(image_hwc_uint8) -> dict[str, float]`` or None."""
+    """score(hwc uint8) → {SEM.*: float}, or None if CLIP is off / won't load."""
     if not clip_enabled():
         return None
     try:
@@ -41,7 +41,7 @@ def try_load_clip() -> Any | None:
         processor = CLIPProcessor.from_pretrained(model_id)
         model = CLIPModel.from_pretrained(model_id)
         model.eval()
-    except Exception:
+    except (OSError, ValueError, RuntimeError):
         return None
 
     labels = list(_PROMPTS.keys())

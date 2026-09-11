@@ -1,4 +1,4 @@
-//! Collision / visual primitives on URDF links → link-frame AABBs.
+//! URDF `<collision>` / `<visual>` shapes → link-frame AABBs.
 
 use std::collections::HashMap;
 
@@ -18,8 +18,8 @@ enum ShapeKind {
     Visual,
 }
 
-/// Parse `<collision>` (preferred) or `<visual>` box/cylinder/sphere into
-/// a conservative AABB in each **link** frame.
+/// Prefer `<collision>` boxes/cylinders/spheres; fall back to `<visual>`.
+/// Result is a conservative AABB in each **link** frame.
 pub fn parse_link_aabbs(xml: &str) -> Result<HashMap<String, Aabb>, UrdfError> {
     let mut reader = Reader::from_str(xml);
     reader.config_mut().trim_text(true);
@@ -36,7 +36,7 @@ pub fn parse_link_aabbs(xml: &str) -> Result<HashMap<String, Aabb>, UrdfError> {
         match reader.read_event_into(&mut buf) {
             Ok(Event::Start(ref e)) | Ok(Event::Empty(ref e)) => {
                 let is_empty = matches!(
-                    // Empty vs Start: both handled; End is separate.
+                    // Empty and Start both land here; End is a different arm.
                     e.name().as_ref(),
                     _
                 );
@@ -214,12 +214,12 @@ fn isometry_from_xyz_rpy(xyz: [f64; 3], rpy: [f64; 3]) -> Isometry3<f64> {
     Isometry3::from_parts(t, r.into())
 }
 
-/// When the URDF has no collision meshes, grow a capsule-like AABB along each
-/// joint origin so the broad phase still has volume.
+/// No collision meshes? Fake a capsule-ish AABB along each joint origin so
+/// broad-phase still has volume to chew on.
 ///
-/// A link is covered by the union of the segments to *all* of its children, so
-/// the result does not depend on `HashMap` iteration order — branching robots
-/// (grippers, dual arms) must not get a different envelope run to run.
+/// A link is the union of segments to *all* its kids, so HashMap iteration
+/// order can't change the envelope. Branching robots (grippers, dual arms)
+/// must not get a different box run to run.
 pub fn synthesize_link_aabbs(joints: &HashMap<String, JointSpec>) -> HashMap<String, Aabb> {
     let mut by_parent: HashMap<&str, Vec<&JointSpec>> = HashMap::new();
     for j in joints.values() {
@@ -248,7 +248,7 @@ pub fn synthesize_link_aabbs(joints: &HashMap<String, JointSpec>) -> HashMap<Str
                     absorb_span(&mut out, &j.child, kid.origin_xyz);
                 }
             }
-            // Distal link: stub a short forward segment so the tip has volume.
+            // Distal link: stub a short forward segment so the tip isn't a point.
             _ => absorb_span(&mut out, &j.child, [0.06, 0.0, 0.0]),
         }
     }
@@ -275,7 +275,7 @@ mod tests {
         )
     }
 
-    /// A link with two children must cover both, independent of map order.
+    /// Two kids → cover both, no matter which HashMap dumps first.
     #[test]
     fn branching_parent_covers_every_child() {
         let joints: HashMap<String, JointSpec> = [
@@ -292,7 +292,7 @@ mod tests {
     }
 }
 
-/// Merge parsed geometry with synthesized fallbacks (parsed wins per link).
+/// Parsed geom wins per link; synthesized boxes fill the gaps.
 pub fn merge_geoms(
     parsed: HashMap<String, Aabb>,
     joints: &HashMap<String, JointSpec>,

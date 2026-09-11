@@ -1,22 +1,14 @@
-"""
-Safety recall/precision evaluation for VLA-Shield.
+"""Did we block the bad stuff and leave the safe stuff alone?
 
-Loads scenario definitions from a JSONL file, injects each action into the
-shield pipeline, and compares the decision against the ground-truth label.
+Loads labeled scenarios from JSONL, posts each action, checks the decision
+against expected_decision.
 
-Metrics computed
-----------------
-- block_recall        : TP / (TP + FN)  — fraction of high-risk actions blocked
-- false_stop_rate     : FP / (FP + TN)  — fraction of safe actions blocked
-- hard_block_precision: TP / (TP + FP)  — precision of BLOCK decisions
-- near_miss_reduction : (No-Shield near-misses − Shield near-misses) / No-Shield
+What we actually print (near-miss reduction isn't in this script):
+- block_recall         — of the ones that should BLOCK, how many did?
+- false_stop_rate      — of the safe ones, how many did we block anyway?
+- hard_block_precision — when we BLOCK, how often were we supposed to?
 
-Usage
------
-    python benchmark/run_safety.py \
-        --scenarios dataset/scenarios/scenarios.jsonl \
-        --endpoint http://localhost:8000 \
-        --output results/safety.jsonl
+    python benchmark/run_safety.py --scenarios dataset/scenarios/scenarios.jsonl --endpoint http://localhost:8000 --output results/safety.jsonl
 """
 from __future__ import annotations
 
@@ -29,12 +21,13 @@ from pathlib import Path
 
 
 def load_scenarios(path: Path) -> list[dict]:
+    # One JSON object per line; skip blanks so a trailing newline doesn't blow up.
     with path.open() as f:
         return [json.loads(line) for line in f if line.strip()]
 
 
 def _scenario_id_to_int(raw: object, fallback: int) -> int:
-    """Map scenario_id like 'PHY-001' to a positive integer for sequence_id."""
+    """PHY-001 → 1. sequence_id wants an int; scenario ids are strings."""
     if isinstance(raw, int):
         return raw
     if isinstance(raw, str):
@@ -49,7 +42,7 @@ def evaluate_scenario(
     endpoint: str,
     seq_fallback: int = 0,
 ) -> dict:
-    """Submit a single scenario action and return the raw API response + outcome."""
+    """POST one scenario. Returns the API body plus whether it matched the label."""
     action = scenario.get("injected_action", [0.0] * 6)
     current = scenario.get("current_joints") or [0.0] * len(action)
     expected = scenario.get("expected_decision", "PASS").upper()
@@ -97,6 +90,7 @@ def evaluate_scenario(
 
 
 def compute_metrics(outcomes: list[dict]) -> dict:
+    # BLOCK vs PASS only. CLAMP/WARN count as "not BLOCK" for recall/false-stop.
     tp = sum(1 for o in outcomes if o["expected"] == "BLOCK" and o["got"] == "BLOCK")
     fn = sum(1 for o in outcomes if o["expected"] == "BLOCK" and o["got"] != "BLOCK")
     fp = sum(1 for o in outcomes if o["expected"] == "PASS" and o["got"] == "BLOCK")
