@@ -9,6 +9,16 @@ from shield.api.kinematics import (
 )
 
 
+def test_panda_seven_dof_loads() -> None:
+    spec = default_urdf_for_dof(7)
+    assert spec is not None
+    path, root, ee = spec
+    chain = load_urdf_chain(str(path), root, ee)
+    assert chain.dof == 7
+    skel = chain.skeleton([0.0] * 7)
+    assert len(skel) == 8
+
+
 def test_ur5_zero_pose_reaches_forward() -> None:
     spec = default_urdf_for_dof(6)
     assert spec is not None

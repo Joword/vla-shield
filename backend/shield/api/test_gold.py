@@ -16,23 +16,8 @@ from shield.api.kinematics import (
 REPO = Path(__file__).resolve().parents[3]
 SCENARIOS = REPO / "dataset" / "scenarios" / "scenarios.jsonl"
 
-# Python fallback covers joint/velocity/collision/forbidden + hint VFV.
-# PHY-001/002 are labeled BLOCK for a 2.97 rad URDF cap, but at dt=0.01
-# the one-step projection never leaves ±π — only VELOCITY_LIMIT (CLAMP) fires.
-# Singularity / tipover / overload still need the Rust physics path.
-_PYTHON_READY = {
-    "PHY-003",
-    "PHY-005",
-    "PHY-008",
-    "SEM-003",
-    "SEM-004",
-    "SEM-006",
-    "PASS-001",
-    "PASS-002",
-    "PASS-003",
-    "PASS-004",
-    "PASS-005",
-}
+# Full 22-row gold set: joint/velocity/collision/forbidden, extra physical
+# checks (singularity / tip-over / overload), and hint-driven VFV.
 
 
 def _load() -> list[dict]:
@@ -56,8 +41,8 @@ def test_phy008_urdf_aabb_hits_bin() -> None:
 
 def test_evaluator_gold_python_ready() -> None:
     ev = ShieldEvaluator()
-    rows = [s for s in _load() if s.get("scenario_id") in _PYTHON_READY]
-    assert rows
+    rows = _load()
+    assert len(rows) == 22
     mismatches = []
     for s in rows:
         out = ev.evaluate(
@@ -74,13 +59,17 @@ def test_evaluator_gold_python_ready() -> None:
         )
         got = out["decision"]
         exp = str(s["expected_decision"]).upper()
-        if got != exp:
+        oids = list(out.get("ontology_ids") or [])
+        tags = [str(t) for t in (s.get("risk_tags") or [])]
+        missing = [t for t in tags if t not in oids]
+        if got != exp or missing:
             mismatches.append(
                 {
                     "id": s["scenario_id"],
                     "expected": exp,
                     "got": got,
-                    "oids": out.get("ontology_ids"),
+                    "oids": oids,
+                    "missing_tags": missing,
                 }
             )
     assert not mismatches, mismatches

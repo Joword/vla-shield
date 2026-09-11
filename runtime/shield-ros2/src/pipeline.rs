@@ -9,7 +9,7 @@ use shield_core::arbiter::{
 use shield_core::scene::SceneGraph;
 use shield_core::types::{JointLimits, RunMode};
 use shield_physics::projection::KinematicClampProjector;
-use shield_physics::{PhysicalProjector, ProjectionContext};
+use shield_physics::{extra_physical_reasons, PhysicalProjector, ProjectionContext};
 use shield_shadow::result::ShadowResult;
 use shield_shadow::{JointSpaceSimulator, ShadowSimulator};
 use shield_urdf::{AxisAlignedBox, UrdfKinematicChain, UrdfRobot};
@@ -194,7 +194,15 @@ impl SafetyPipeline {
         }
 
         let arbiter_start = Instant::now();
-        let decision = self.arbiter_decide(action, &collision_report, semantic, shadow_owned.as_ref());
+        let extra = extra_physical_reasons(
+            action,
+            current_joints,
+            limits,
+            chain_ref,
+            proposal.as_ref().ok(),
+        );
+        let decision =
+            self.arbiter_decide(action, &collision_report, semantic, shadow_owned.as_ref(), extra);
         let arbiter_ms = arbiter_start.elapsed().as_secs_f64() * 1000.0;
 
         let total_ms = Instant::now().duration_since(t0).as_secs_f64() * 1000.0;
@@ -239,8 +247,9 @@ impl SafetyPipeline {
         collision: &CollisionReport,
         semantic: &SemanticRiskReport,
         shadow: Option<&ShadowResult>,
+        extra: Vec<ArbiterReason>,
     ) -> ArbiterDecision {
-        let mut reasons = Vec::new();
+        let mut reasons = extra;
 
         if collision.hit {
             for pair in &collision.pairs {

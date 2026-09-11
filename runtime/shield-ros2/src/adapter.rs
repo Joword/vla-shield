@@ -268,4 +268,66 @@ mod tests {
         assert_eq!(out.decision, SafetyDecision::BLOCK);
         assert!(out.ontology_ids.iter().any(|id| id == "PHY.COLLISION"));
     }
+
+    #[test]
+    fn singularity_blocks_elbow_lock() {
+        let pipe = SafetyPipeline::with_defaults(RuntimeConfig::default());
+        let mut action = vec![0.0; 7];
+        action[3] = 0.5;
+        let out = pipe.evaluate_proposal(
+            &ActionProposal {
+                sequence_id: 3,
+                t_ns: 0,
+                action,
+                current_joints: vec![0.0, 0.0, 0.0, 0.02, 0.0, 0.02, 0.0],
+            },
+            &limits(7),
+            &SceneGraph::default(),
+            &SemanticRiskReport::default(),
+        );
+        assert_eq!(out.decision, SafetyDecision::BLOCK);
+        assert!(out.ontology_ids.iter().any(|id| id == "PHY.SINGULARITY"));
+    }
+
+    #[test]
+    fn tipover_blocks_base_accel() {
+        let pipe = SafetyPipeline::with_defaults(RuntimeConfig::default());
+        let mut action = vec![0.0; 8];
+        action[7] = 2.5;
+        let out = pipe.evaluate_proposal(
+            &ActionProposal {
+                sequence_id: 4,
+                t_ns: 0,
+                action,
+                current_joints: vec![0.0; 8],
+            },
+            &limits(8),
+            &SceneGraph::default(),
+            &SemanticRiskReport::default(),
+        );
+        assert_eq!(out.decision, SafetyDecision::BLOCK);
+        assert!(out.ontology_ids.iter().any(|id| id == "PHY.TIPOVER"));
+    }
+
+    #[test]
+    fn overload_blocks_wrist_spike() {
+        let pipe = SafetyPipeline::with_defaults(RuntimeConfig::default());
+        let mut lim = limits(7);
+        lim.torque_max[4] = 20.0;
+        let mut action = vec![0.0; 7];
+        action[4] = 5.0;
+        let out = pipe.evaluate_proposal(
+            &ActionProposal {
+                sequence_id: 5,
+                t_ns: 0,
+                action,
+                current_joints: vec![0.0, 0.3, 0.0, -1.0, 0.0, 1.5, 0.8],
+            },
+            &lim,
+            &SceneGraph::default(),
+            &SemanticRiskReport::default(),
+        );
+        assert_eq!(out.decision, SafetyDecision::BLOCK);
+        assert!(out.ontology_ids.iter().any(|id| id == "PHY.OVERLOAD"));
+    }
 }

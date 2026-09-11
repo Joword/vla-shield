@@ -145,7 +145,8 @@ impl UrdfKinematicChain {
 }
 
 /// Default threshold below which the arm is treated as near a kinematic singularity.
-pub const SINGULARITY_MANIPULABILITY_THRESHOLD: f64 = 1e-4;
+/// Matches `dataset/ontology/rules_physical.json` (`min_manipulability`: 0.05).
+pub const SINGULARITY_MANIPULABILITY_THRESHOLD: f64 = 0.05;
 
 fn joint_transform(j: &JointSpec, q: f64) -> Isometry3<f64> {
     let origin = isometry_from_xyz_rpy(j.origin_xyz, j.origin_rpy);
@@ -216,12 +217,31 @@ mod tests {
         let robot = UrdfRobot::from_file(&path).expect("panda_arm_simple.urdf");
         let chain =
             UrdfKinematicChain::from_robot(&robot, "panda_link0", "panda_hand").expect("chain");
-        assert_eq!(chain.dof(), 6);
-        let _ = chain.ee_position(&[0.0; 6]).unwrap();
-        let skel = chain.skeleton(&[0.0; 6]).unwrap();
-        assert_eq!(skel.len(), 7);
-        let aabbs = chain.link_world_aabbs(&[0.0; 6]).unwrap();
+        assert_eq!(chain.dof(), 7);
+        let _ = chain.ee_position(&[0.0; 7]).unwrap();
+        let skel = chain.skeleton(&[0.0; 7]).unwrap();
+        assert_eq!(skel.len(), 8);
+        let aabbs = chain.link_world_aabbs(&[0.0; 7]).unwrap();
         assert!(!aabbs.is_empty());
+    }
+
+    #[test]
+    fn panda_elbow_lock_has_low_manipulability() {
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../dataset/urdf/panda_arm_simple.urdf");
+        let robot = UrdfRobot::from_file(&path).expect("panda");
+        let chain =
+            UrdfKinematicChain::from_robot(&robot, "panda_link0", "panda_hand").expect("chain");
+        let stretched = chain
+            .positional_manipulability(&[0.0, 0.0, 0.0, 0.02, 0.0, 0.02, 0.0])
+            .unwrap();
+        let folded = chain
+            .positional_manipulability(&[0.0, 0.3, 0.0, -1.5, 0.0, 1.5, 0.0])
+            .unwrap();
+        assert!(
+            stretched < folded,
+            "stretched={stretched} folded={folded}"
+        );
     }
 
     #[test]

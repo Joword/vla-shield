@@ -30,6 +30,7 @@ DEFAULT_ZONES: list[dict] = [
 
 
 def link_lengths_for_dof(dof: int) -> list[float]:
+    """Sketch-model link lengths for ``dof`` (UR5-ish, distal 8 cm extras)."""
     if dof <= 0:
         return []
     if dof <= len(_BASE_LINKS):
@@ -66,6 +67,7 @@ def fk_skeleton(joints: list[float]) -> list[list[float]]:
 
 
 def ee_of(joints: list[float]) -> list[float]:
+    """End-effector XYZ of the yaw/pitch sketch skeleton."""
     return fk_skeleton(joints)[-1]
 
 
@@ -115,9 +117,10 @@ _SYNTH_RADIUS = 0.045
 
 
 def default_urdf_for_dof(dof: int) -> tuple[Path, str, str] | None:
+    """Bundled URDF path plus root/EE link names for 6-DoF UR5 or 7-DoF Panda."""
     if dof == 6 and UR5_URDF.is_file():
         return UR5_URDF, "base_link", "wrist_3_link"
-    if dof == 6 and PANDA_URDF.is_file():
+    if dof == 7 and PANDA_URDF.is_file():
         return PANDA_URDF, "panda_link0", "panda_hand"
     return None
 
@@ -194,15 +197,19 @@ class _Joint:
 
 @dataclass
 class UrdfChain:
+    """Serial revolute chain from URDF, evaluated as 4×4 frames (Z-up, metres)."""
+
     joints: list[_Joint]
     root: str
     ee: str
 
     @property
     def dof(self) -> int:
+        """Number of actuated revolute/continuous joints on the chain."""
         return len(self.joints)
 
     def frames(self, q: list[float]) -> list[tuple[str, list[list[float]]]]:
+        """World poses ``(link, 4×4)`` from root through each child, at ``q``."""
         world = _eye()
         frames = [(self.root, world)]
         n = min(len(q), len(self.joints))
@@ -215,12 +222,16 @@ class UrdfChain:
         return frames
 
     def skeleton(self, q: list[float]) -> list[list[float]]:
+        """Link origins along the chain, including the root."""
         pts = []
         for _, m in self.frames(q):
             pts.append([m[0][3], m[1][3], m[2][3]])
         return pts
 
-    def link_aabbs(self, q: list[float], radius: float = _SYNTH_RADIUS) -> list[tuple[str, list[float], list[float]]]:
+    def link_aabbs(
+        self, q: list[float], radius: float = _SYNTH_RADIUS
+    ) -> list[tuple[str, list[float], list[float]]]:
+        """Conservative world AABBs for each link at configuration ``q``."""
         frames = self.frames(q)
         boxes: list[tuple[str, list[float], list[float]]] = []
         for idx, (name, m) in enumerate(frames):
@@ -231,7 +242,8 @@ class UrdfChain:
             # Conservative world AABB: origin + span direction transformed as a point.
             ox, oy, oz = m[0][3], m[1][3], m[2][3]
             if idx + 1 < len(frames):
-                nx, ny, nz = frames[idx + 1][1][0][3], frames[idx + 1][1][1][3], frames[idx + 1][1][2][3]
+                nxt = frames[idx + 1][1]
+                nx, ny, nz = nxt[0][3], nxt[1][3], nxt[2][3]
             else:
                 nx, ny, nz = ox + span[0], oy + span[1], oz + span[2]
             mn = [min(ox, nx) - radius, min(oy, ny) - radius, min(oz, nz) - radius]
@@ -256,6 +268,7 @@ def _chain_between(joints: dict[str, _Joint], root: str, ee: str) -> list[_Joint
 
 @lru_cache(maxsize=8)
 def load_urdf_chain(path: str, root: str, ee: str) -> UrdfChain:
+    """Parse ``path`` and return the revolute chain from ``root`` to ``ee``."""
     tree = ET.parse(path)
     robot = tree.getroot()
     joints: dict[str, _Joint] = {}
@@ -281,7 +294,13 @@ def load_urdf_chain(path: str, root: str, ee: str) -> UrdfChain:
     return UrdfChain(joints=chain, root=root, ee=ee)
 
 
-def aabb_intersects(a_min: list[float], a_max: list[float], b_min: list[float], b_max: list[float]) -> bool:
+def aabb_intersects(
+    a_min: list[float],
+    a_max: list[float],
+    b_min: list[float],
+    b_max: list[float],
+) -> bool:
+    """True when axis-aligned boxes ``a`` and ``b`` overlap (inclusive)."""
     return (
         a_min[0] <= b_max[0]
         and a_max[0] >= b_min[0]
@@ -293,6 +312,7 @@ def aabb_intersects(a_min: list[float], a_max: list[float], b_min: list[float], 
 
 
 def point_in_aabb(p: list[float], bmin: list[float], bmax: list[float]) -> bool:
+    """True when point ``p`` lies inside the inclusive AABB ``[bmin, bmax]``."""
     return (
         bmin[0] <= p[0] <= bmax[0]
         and bmin[1] <= p[1] <= bmax[1]
@@ -400,6 +420,7 @@ def obstacles_as_tuples(
 
 
 def fk_skeleton_for(joints: list[float], chain: UrdfChain | None = None) -> list[list[float]]:
+    """URDF skeleton when a matching chain exists, else the yaw/pitch sketch."""
     if chain is not None and chain.dof == len(joints):
         return chain.skeleton(joints)
     spec = default_urdf_for_dof(len(joints))
@@ -407,6 +428,6 @@ def fk_skeleton_for(joints: list[float], chain: UrdfChain | None = None) -> list
         path, root, ee = spec
         try:
             return load_urdf_chain(str(path), root, ee).skeleton(joints)
-        except Exception:
+        except (OSError, ValueError, ET.ParseError):
             pass
     return fk_skeleton(joints)

@@ -38,6 +38,7 @@ from shield.api.kinematics import (
     zones_for,
     UrdfChain,
 )
+from shield.api.physical_checks import extra_physical_reasons
 from shield.api.rule_engine import RuleRegistry
 from shield.vfv.predictor import ShadowSimPredictor, UrdfShadowConfig
 from shield.vfv.semantic import SemanticVFVPredictor
@@ -113,11 +114,20 @@ class ShieldEvaluator:
         return self._rules
 
     def _get_limits(self, dof: int) -> dict[str, list[float]]:
+        torque_max = [50.0] * dof
+        acceleration_max = [10.0] * dof
+        if dof == 7:
+            # Franka wrist (joint 5, 0-based 4): 20 Nm nominal.
+            torque_max[4] = 20.0
+        if dof >= 8:
+            acceleration_max[-1] = 1.5
         return {
             "joint_names": [f"j{i}" for i in range(dof)],
             "position_min": [-3.14] * dof,
             "position_max": [3.14] * dof,
             "velocity_max": [1.0] * dof,
+            "acceleration_max": acceleration_max,
+            "torque_max": torque_max,
         }
 
     def _get_shadow_predictor(self, dof: int) -> ShadowSimPredictor:
@@ -173,6 +183,8 @@ class ShieldEvaluator:
             "velocity_max": limits["velocity_max"],
             "dt": self._dt,
             "collision_epsilon": 0.02,
+            "acceleration_max": limits["acceleration_max"],
+            "torque_max": limits["torque_max"],
         }
         if urdf is not None:
             kwargs["urdf_path"] = urdf[0]
@@ -242,6 +254,18 @@ class ShieldEvaluator:
                 z=0.0,
             )
             reasons.append(("PHY.FORBIDDEN_ZONE", detail, 1.0))
+
+        for oid, detail, score in extra_physical_reasons(
+            list(req.action),
+            list(req.current_joints),
+            torque_max=limits["torque_max"],
+            chain=chain,
+            joint_names=limits["joint_names"],
+        ):
+            if any(r[0] == oid for r in reasons):
+                continue
+            rendered = self._rules.render(oid, detail)
+            reasons.append((oid, rendered or detail, score))
 
         risk = max((r[2] for r in reasons), default=0.0)
         return {"reasons": reasons, "risk": risk}

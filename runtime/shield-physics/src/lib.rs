@@ -1,3 +1,4 @@
+pub mod checks;
 pub mod projection;
 pub mod semantic;
 
@@ -6,6 +7,7 @@ use shield_core::error::Result;
 use shield_core::scene::SceneGraph;
 use shield_core::types::JointLimits;
 
+pub use checks::{extra_physical_reasons, ontology_for_projection_error};
 pub use semantic::{SemanticConstraint, SemanticConstraintMapper};
 
 /// Proposed dynamic state after applying an action.

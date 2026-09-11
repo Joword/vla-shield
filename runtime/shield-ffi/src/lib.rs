@@ -43,7 +43,7 @@ use shield_core::ontology::physical;
 use shield_core::scene::{Primitive, SceneEntity, SceneGraph};
 use shield_core::types::{Aabb, JointLimits};
 use shield_physics::projection::KinematicClampProjector;
-use shield_physics::{PhysicalProjector, ProjectionContext};
+use shield_physics::{extra_physical_reasons, ontology_for_projection_error, PhysicalProjector, ProjectionContext};
 use shield_urdf::{AxisAlignedBox, UrdfKinematicChain, UrdfRobot};
 
 /// `(id, min_x, min_y, min_z, max_x, max_y, max_z, ontology_id)` as sent from Python.
@@ -449,13 +449,10 @@ impl PyShieldPipeline {
                 });
             }
         }
-        // Propagate physics projection errors as PHY.JOINT_LIMIT / PHY.FORBIDDEN_ZONE.
+        // Propagate physics projection errors with a real ontology id, then
+        // layer singularity / tip-over / overload on the (projected or current) state.
         if let Err(ref e) = proposal {
-            let oid = if e.to_string().to_lowercase().contains("forbidden") {
-                physical::forbidden_zone()
-            } else {
-                physical::joint_limit()
-            };
+            let oid = ontology_for_projection_error(&e.to_string());
             let already = reasons.iter().any(|r| r.ontology_id == oid);
             if !already {
                 reasons.push(ArbiterReason {
@@ -465,6 +462,13 @@ impl PyShieldPipeline {
                 });
             }
         }
+        reasons.extend(extra_physical_reasons(
+            &vec_to_action(t_ns, sequence_id, action_in.to_vec()),
+            current_joints,
+            &self.limits,
+            self.urdf_chain.as_ref(),
+            proposal.as_ref().ok(),
+        ));
         let arbiter_ms = arbiter_start.elapsed().as_secs_f64() * 1000.0;
 
         let total_ms = t0.elapsed().as_secs_f64() * 1000.0;
