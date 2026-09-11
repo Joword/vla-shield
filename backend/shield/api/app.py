@@ -89,7 +89,7 @@ async def lifespan(fastapi_app: FastAPI) -> AsyncGenerator[None, None]:
 
 app = FastAPI(
     title="VLA-Shield Ops API",
-    version="0.1.0",
+    version="0.5.7",
     lifespan=lifespan,
 )
 

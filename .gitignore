@@ -38,6 +38,8 @@ Thumbs.db
 # Docker
 docker-compose.override.yml
 
-# Docs
-docs/
+# Docs — local notes stay private; README figures are public
+docs/*
+!docs/figures/
+!docs/figures/**
 paper/

@@ -1,6 +1,6 @@
 [project]
 name = "shield-backend"
-version = "0.1.0"
+version = "0.5.7"
 description = "VLA-Shield backend: REST/WebSocket API, VLM semantic risk inference, and safety evaluation"
 requires-python = ">=3.10"
 license = { text = "Apache-2.0" }

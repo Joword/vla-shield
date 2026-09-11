@@ -1,0 +1,58 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="960" height="420" viewBox="0 0 960 420" role="img" aria-label="Gold-set coverage of 22 scenarios">
+  <rect width="960" height="420" fill="#fafbfc"/>
+  <text x="32" y="36" font-family="Segoe UI, Helvetica, Arial, sans-serif" font-size="16" font-weight="700" fill="#0f172a">Figure 3. Gold set  22 scenarios, 13 ontology nodes</text>
+  <text x="32" y="56" font-family="Segoe UI, Helvetica, Arial, sans-serif" font-size="11" fill="#64748b">From dataset/scenarios/scenarios.jsonl. Expected decisions, not measured latency.</text>
+
+  <!-- Panel A: decisions -->
+  <text x="32" y="88" font-family="Segoe UI, Helvetica, Arial, sans-serif" font-size="12" font-weight="600" fill="#334155">(a) Expected decision mix</text>
+  <!-- BLOCK 13 / 22 * 280 = 165.5 -->
+  <rect x="32" y="108" width="280" height="28" rx="4" fill="#e2e8f0"/>
+  <rect x="32" y="108" width="165.5" height="28" rx="4" fill="#b91c1c"/>
+  <text x="44" y="127" font-family="Segoe UI, Helvetica, Arial, sans-serif" font-size="12" fill="#fff">BLOCK  13</text>
+  <rect x="32" y="144" width="280" height="28" rx="4" fill="#e2e8f0"/>
+  <rect x="32" y="144" width="12.7" height="28" rx="4" fill="#d97706"/>
+  <text x="52" y="163" font-family="Segoe UI, Helvetica, Arial, sans-serif" font-size="12" fill="#0f172a">CLAMP  1</text>
+  <rect x="32" y="180" width="280" height="28" rx="4" fill="#e2e8f0"/>
+  <rect x="32" y="180" width="38.2" height="28" rx="4" fill="#ca8a04"/>
+  <text x="76" y="199" font-family="Segoe UI, Helvetica, Arial, sans-serif" font-size="12" fill="#0f172a">WARN  3</text>
+  <rect x="32" y="216" width="280" height="28" rx="4" fill="#e2e8f0"/>
+  <rect x="32" y="216" width="63.6" height="28" rx="4" fill="#0f766e"/>
+  <text x="44" y="235" font-family="Segoe UI, Helvetica, Arial, sans-serif" font-size="12" fill="#fff">PASS  5</text>
+  <text x="32" y="262" font-family="Segoe UI, Helvetica, Arial, sans-serif" font-size="11" fill="#64748b">n = 22  ·  5 PASS rows for false-stop rate</text>
+
+  <!-- Panel B: family -->
+  <text x="360" y="88" font-family="Segoe UI, Helvetica, Arial, sans-serif" font-size="12" font-weight="600" fill="#334155">(b) Scenario family</text>
+  <!-- PHY 8/22*200=72.7, SEM 6=54.5, COMBO 3=27.3, PASS 5=45.5  use max 8 -> 160px -->
+  <rect x="360" y="108" width="160" height="22" rx="3" fill="#0f766e"/>
+  <text x="372" y="124" font-family="Segoe UI, Helvetica, Arial, sans-serif" font-size="11" fill="#fff">PHY  8</text>
+  <rect x="360" y="138" width="120" height="22" rx="3" fill="#0369a1"/>
+  <text x="372" y="154" font-family="Segoe UI, Helvetica, Arial, sans-serif" font-size="11" fill="#fff">SEM  6</text>
+  <rect x="360" y="168" width="60" height="22" rx="3" fill="#7c3aed"/>
+  <text x="372" y="184" font-family="Segoe UI, Helvetica, Arial, sans-serif" font-size="11" fill="#fff">COMBO  3</text>
+  <rect x="360" y="198" width="100" height="22" rx="3" fill="#64748b"/>
+  <text x="372" y="214" font-family="Segoe UI, Helvetica, Arial, sans-serif" font-size="11" fill="#fff">PASS  5</text>
+  <text x="360" y="242" font-family="Segoe UI, Helvetica, Arial, sans-serif" font-size="11" fill="#64748b">Platforms: ur5e · franka · mobile</text>
+
+  <!-- Panel C: ontology coverage -->
+  <text x="580" y="88" font-family="Segoe UI, Helvetica, Arial, sans-serif" font-size="12" font-weight="600" fill="#334155">(c) Ontology coverage (all 13 hit e1)</text>
+  <g font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="10" fill="#0f172a">
+    <rect x="580" y="104" width="168" height="22" rx="3" fill="#ccfbf1"/><text x="590" y="119">PHY.COLLISION</text>
+    <rect x="756" y="104" width="168" height="22" rx="3" fill="#ccfbf1"/><text x="766" y="119">PHY.TIPOVER</text>
+    <rect x="580" y="130" width="168" height="22" rx="3" fill="#ccfbf1"/><text x="590" y="145">PHY.OVERLOAD</text>
+    <rect x="756" y="130" width="168" height="22" rx="3" fill="#ccfbf1"/><text x="766" y="145">PHY.VELOCITY_LIMIT</text>
+    <rect x="580" y="156" width="168" height="22" rx="3" fill="#ccfbf1"/><text x="590" y="171">PHY.JOINT_LIMIT</text>
+    <rect x="756" y="156" width="168" height="22" rx="3" fill="#ccfbf1"/><text x="766" y="171">PHY.SINGULARITY</text>
+    <rect x="580" y="182" width="168" height="22" rx="3" fill="#ccfbf1"/><text x="590" y="197">PHY.FORBIDDEN_ZONE</text>
+    <rect x="756" y="182" width="168" height="22" rx="3" fill="#e0f2fe"/><text x="766" y="197">SEM.FRAGILE</text>
+    <rect x="580" y="208" width="168" height="22" rx="3" fill="#e0f2fe"/><text x="590" y="223">SEM.HEAT_SOURCE</text>
+    <rect x="756" y="208" width="168" height="22" rx="3" fill="#e0f2fe"/><text x="766" y="223">SEM.FORBIDDEN_REGION</text>
+    <rect x="580" y="234" width="168" height="22" rx="3" fill="#e0f2fe"/><text x="590" y="249">SEM.LIQUID_ELECTRICAL</text>
+    <rect x="756" y="234" width="168" height="22" rx="3" fill="#e0f2fe"/><text x="766" y="249">SEM.HUMAN_PROXIMITY</text>
+    <rect x="580" y="260" width="168" height="22" rx="3" fill="#e0f2fe"/><text x="590" y="275">SEM.SHARP_OBJECT</text>
+  </g>
+
+  <line x1="32" y1="300" x2="928" y2="300" stroke="#e2e8f0"/>
+  <text x="32" y="328" font-family="Segoe UI, Helvetica, Arial, sans-serif" font-size="12" font-weight="600" fill="#334155">Python fallback evaluator: 22 / 22 expected decisions (in-process gold test)</text>
+  <text x="32" y="350" font-family="Segoe UI, Helvetica, Arial, sans-serif" font-size="11" fill="#64748b">Not a field study. PASS rows exist so false-stop rate is measurable. Latency vs the 5 ms budget is still a benchmark script, not a published curve.</text>
+  <text x="32" y="390" font-family="Segoe UI, Helvetica, Arial, sans-serif" font-size="10" fill="#94a3b8">VLA-Shield  ·  dataset/scenarios/scenarios.jsonl</text>
+</svg>
