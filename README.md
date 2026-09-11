@@ -63,7 +63,7 @@ Runtime is a **filter**, not a second policy. Panel (a) is the stack a command a
 
 22 rows in `dataset/scenarios/scenarios.jsonl`. Decisions: **BLOCK 13 · CLAMP 1 · WARN 3 · PASS 5**. Families: PHY 8, SEM 6, COMBO 3, PASS 5. All **13** ontology nodes appear at least once. PASS rows exist so false-stop rate is measurable.
 
-![Figure 3. Gold-set coverage from scenarios.jsonl.](docs/figures/gold-set.svg)
+![Figure 3. Gold-set coverage from scenarios.jsonl.](docs/figures/gold-set.png)
 
 <p align="center"><em>Figure 3. Expected-decision mix, scenario family, and ontology coverage. Not a field study; not a latency plot.</em></p>
 
