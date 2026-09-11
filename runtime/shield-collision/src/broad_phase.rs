@@ -5,31 +5,46 @@ use shield_physics::DynProposal;
 
 /// AABB-based broad-phase collision prechecker.
 ///
-/// Generates a conservative bounding box per robot link from the proposed joint
-/// state, inflates it by `epsilon`, and tests against all scene entities.
+/// Link volumes come from URDF FK when `CollisionContext::urdf_chain` is set.
+/// Without a chain, a single conservative box is placed at the projected
+/// end-effector (skipped when EE is still the origin placeholder).
 pub struct AabbBroadPhase;
 
 impl AabbBroadPhase {
-    /// Placeholder: generate per-link AABBs from joint positions.
-    /// Real implementation would use robot URDF / DH chain.
-    fn link_aabbs(proposal: &DynProposal, epsilon: f64) -> Vec<(String, Aabb)> {
-        let n = proposal.joint_positions.len();
-        let mut aabbs = Vec::with_capacity(n);
-        for i in 0..n {
-            let p = proposal.joint_positions[i];
-            let base = Aabb::new(
-                [p - 0.05, -0.05, -0.05],
-                [p + 0.05, 0.05, 0.05],
-            );
-            aabbs.push((format!("link_{i}"), base.inflated(epsilon)));
+    fn link_aabbs(ctx: &CollisionContext, proposal: &DynProposal) -> Vec<(String, Aabb)> {
+        if let Some(boxes) = ctx.link_aabbs {
+            return boxes
+                .iter()
+                .map(|(name, aabb)| (name.clone(), aabb.inflated(ctx.epsilon)))
+                .collect();
         }
-        aabbs
+        if let Some(chain) = ctx.urdf_chain {
+            if let Ok(boxes) = chain.link_world_aabbs(&proposal.joint_positions) {
+                return boxes
+                    .into_iter()
+                    .map(|(name, aabb)| (name, aabb.inflated(ctx.epsilon)))
+                    .collect();
+            }
+        }
+        let ee = proposal.ee_position;
+        let is_origin = ee[0].abs() < 1e-12 && ee[1].abs() < 1e-12 && ee[2].abs() < 1e-12;
+        if is_origin {
+            return Vec::new();
+        }
+        let r = 0.06 + ctx.epsilon;
+        vec![(
+            "ee".into(),
+            Aabb::new(
+                [ee[0] - r, ee[1] - r, ee[2] - r],
+                [ee[0] + r, ee[1] + r, ee[2] + r],
+            ),
+        )]
     }
 }
 
 impl CollisionPrechecker for AabbBroadPhase {
     fn precheck(&self, ctx: &CollisionContext, proposal: &DynProposal) -> CollisionReport {
-        let link_aabbs = Self::link_aabbs(proposal, ctx.epsilon);
+        let link_aabbs = Self::link_aabbs(ctx, proposal);
         let mut pairs = Vec::new();
 
         for (link_name, link_aabb) in &link_aabbs {
@@ -63,6 +78,7 @@ mod tests {
     use shield_core::scene::{Primitive, SceneEntity, SceneGraph};
     use shield_core::types::JointLimits;
     use shield_physics::DynProposal;
+    use shield_urdf::{UrdfKinematicChain, UrdfRobot};
 
     fn test_scene() -> SceneGraph {
         SceneGraph {
@@ -70,7 +86,9 @@ mod tests {
             revision: 1,
             entities: vec![SceneEntity {
                 id: "shelf".into(),
-                primitive: Primitive::Box { extents: [1.0, 0.4, 2.0] },
+                primitive: Primitive::Box {
+                    extents: [1.0, 0.4, 2.0],
+                },
                 pose: [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0],
                 aabb: Aabb::new([-0.5, -0.2, -1.0], [0.5, 0.2, 1.0]),
                 tags: vec![],
@@ -78,57 +96,83 @@ mod tests {
         }
     }
 
-    #[test]
-    fn detects_collision() {
-        let checker = AabbBroadPhase;
-        let scene = test_scene();
-        let limits = JointLimits {
-            names: vec!["j0".into()],
-            position_min: vec![-3.14],
-            position_max: vec![3.14],
-            velocity_max: vec![1.0],
-            acceleration_max: vec![5.0],
-            torque_max: vec![50.0],
-        };
-        let ctx = CollisionContext {
-            scene: &scene,
-            limits: &limits,
-            epsilon: 0.02,
-        };
-        let proposal = DynProposal {
-            joint_positions: vec![0.0],
-            joint_velocities: vec![0.1],
-            ee_position: [0.0; 3],
-            ee_orientation: [0.0, 0.0, 0.0, 1.0],
-        };
-        let report = checker.precheck(&ctx, &proposal);
-        assert!(report.hit);
+    fn limits(n: usize) -> JointLimits {
+        JointLimits {
+            names: (0..n).map(|i| format!("j{i}")).collect(),
+            position_min: vec![-3.14; n],
+            position_max: vec![3.14; n],
+            velocity_max: vec![1.0; n],
+            acceleration_max: vec![5.0; n],
+            torque_max: vec![50.0; n],
+        }
     }
 
     #[test]
-    fn no_collision_when_far() {
+    fn urdf_fk_detects_collision_near_base() {
+        let xml = r#"<?xml version="1.0"?>
+<robot name="arm">
+  <link name="base"/>
+  <link name="ee"/>
+  <joint name="j1" type="revolute">
+    <parent link="base"/>
+    <child link="ee"/>
+    <origin xyz="0.2 0 0" rpy="0 0 0"/>
+    <axis xyz="0 0 1"/>
+    <limit lower="-3.14" upper="3.14" effort="1" velocity="1"/>
+  </joint>
+</robot>
+"#;
+        let robot = UrdfRobot::from_str(xml).unwrap();
+        let chain = UrdfKinematicChain::from_robot(&robot, "base", "ee").unwrap();
         let checker = AabbBroadPhase;
         let scene = test_scene();
-        let limits = JointLimits {
-            names: vec!["j0".into()],
-            position_min: vec![-6.0],
-            position_max: vec![6.0],
-            velocity_max: vec![1.0],
-            acceleration_max: vec![5.0],
-            torque_max: vec![50.0],
-        };
-        let ctx = CollisionContext {
-            scene: &scene,
-            limits: &limits,
-            epsilon: 0.01,
-        };
+        let lim = limits(1);
+        let ctx = CollisionContext::new(&scene, &lim, 0.02).with_urdf(&chain);
         let proposal = DynProposal {
-            joint_positions: vec![5.0],
+            joint_positions: vec![0.0],
             joint_velocities: vec![0.0],
-            ee_position: [0.0; 3],
+            ee_position: chain.ee_position(&[0.0]).unwrap(),
+            ee_orientation: [0.0, 0.0, 0.0, 1.0],
+        };
+        let report = checker.precheck(&ctx, &proposal);
+        assert!(report.hit, "synthesized link AABB should overlap the shelf");
+    }
+
+    #[test]
+    fn no_collision_when_scene_empty() {
+        let checker = AabbBroadPhase;
+        let scene = SceneGraph::default();
+        let lim = limits(1);
+        let ctx = CollisionContext::new(&scene, &lim, 0.01);
+        let proposal = DynProposal {
+            joint_positions: vec![0.0],
+            joint_velocities: vec![0.0],
+            ee_position: [0.4, 0.0, 0.4],
             ee_orientation: [0.0, 0.0, 0.0, 1.0],
         };
         let report = checker.precheck(&ctx, &proposal);
         assert!(!report.hit);
+    }
+
+    #[test]
+    fn ee_fallback_hits_obstacle() {
+        let checker = AabbBroadPhase;
+        let scene = test_scene();
+        let lim = limits(1);
+        let ctx = CollisionContext::new(&scene, &lim, 0.02);
+        let proposal = DynProposal {
+            joint_positions: vec![0.0],
+            joint_velocities: vec![0.0],
+            ee_position: [0.0, 0.0, 0.0],
+            ee_orientation: [0.0, 0.0, 0.0, 1.0],
+        };
+        // Origin EE without URDF is ignored (avoids the old joint-as-X false hits
+        // AND false misses). Place EE on the shelf instead.
+        let proposal_hit = DynProposal {
+            ee_position: [0.0, 0.0, 0.1],
+            ..proposal
+        };
+        let report = checker.precheck(&ctx, &proposal_hit);
+        assert!(report.hit);
     }
 }
