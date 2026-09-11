@@ -1,0 +1,19 @@
+# CUDA kernels are built by nvcc in shield-cuda/build.rs.
+# clangd must NOT enter CUDA compilation mode (.cu → libdevice / --cuda-path);
+# cuda_runtime_compat.h falls back to stubs when the toolkit headers are absent.
+
+If:
+  PathMatch: .*shield-cuda[/\\]src[/\\]kernels[/\\].*\.cu
+CompileFlags:
+  Add:
+    - -x
+    - c++
+    - -std=c++17
+    - -nocudainc
+    - -nocudalib
+
+If:
+  PathMatch: .*shield-cuda[/\\]src[/\\]kernels[/\\].*\.(cpp|h)
+CompileFlags:
+  Add:
+    - -std=c++17
