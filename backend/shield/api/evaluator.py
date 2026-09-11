@@ -25,7 +25,19 @@ from typing import Any
 
 import numpy as np
 
-from shield.api.kinematics import fk_skeleton, shadow_polyline, zones_for
+from shield.api.kinematics import (
+    collision_pairs,
+    default_urdf_for_dof,
+    fk_skeleton,
+    fk_skeleton_for,
+    forbidden_zone_hits,
+    load_urdf_chain,
+    obstacles_as_tuples,
+    parse_obstacles,
+    shadow_polyline,
+    zones_for,
+    UrdfChain,
+)
 from shield.api.rule_engine import RuleRegistry
 from shield.vfv.predictor import ShadowSimPredictor, UrdfShadowConfig
 from shield.vfv.semantic import SemanticVFVPredictor
@@ -50,6 +62,7 @@ class EvalInput:
     language_task: str = ""
     scene_hints: list[str] = field(default_factory=list)
     image: np.ndarray | None = None
+    obstacles: list[dict] | None = None
 
 
 def _coerce_joints(current_joints: list[float], dof: int) -> list[float]:
@@ -89,10 +102,11 @@ class ShieldEvaluator:
         rule_registry: RuleRegistry | None = None,
     ) -> None:
         self._dt = dt
-        self._ffi_pipelines: dict[int, Any] = {}
+        self._ffi_pipelines: dict[tuple[int, str], Any] = {}
         self._shadow_predictors: dict[int, ShadowSimPredictor] = {}
         self._vfv = SemanticVFVPredictor()
         self._rules = rule_registry or RuleRegistry.load(ONTOLOGY_DIR)
+        self._urdf_chains: dict[int, UrdfChain | None] = {}
 
     @property
     def rules(self) -> RuleRegistry:
@@ -123,25 +137,52 @@ class ShieldEvaluator:
         self._shadow_predictors[dof] = predictor
         return predictor
 
+    def _get_urdf(self, dof: int) -> tuple[str, str, str] | None:
+        spec = default_urdf_for_dof(dof)
+        if spec is None:
+            return None
+        path, root, ee = spec
+        return str(path), root, ee
+
+    def _get_python_chain(self, dof: int) -> UrdfChain | None:
+        if dof in self._urdf_chains:
+            return self._urdf_chains[dof]
+        spec = self._get_urdf(dof)
+        chain: UrdfChain | None = None
+        if spec is not None:
+            try:
+                chain = load_urdf_chain(*spec)
+            except Exception:
+                chain = None
+        self._urdf_chains[dof] = chain
+        return chain
+
     def _get_ffi_pipeline(self, dof: int) -> Any | None:
         if shield_ffi is None:
             return None
-        pipeline = self._ffi_pipelines.get(dof)
+        urdf = self._get_urdf(dof)
+        key = (dof, urdf[0] if urdf else "")
+        pipeline = self._ffi_pipelines.get(key)
         if pipeline is not None:
             return pipeline
         limits = self._get_limits(dof)
-        pipeline = shield_ffi.ShieldPipeline(
-            joint_names=limits["joint_names"],
-            position_min=limits["position_min"],
-            position_max=limits["position_max"],
-            velocity_max=limits["velocity_max"],
-            dt=self._dt,
-            collision_epsilon=0.02,
-        )
-        self._ffi_pipelines[dof] = pipeline
+        kwargs: dict[str, Any] = {
+            "joint_names": limits["joint_names"],
+            "position_min": limits["position_min"],
+            "position_max": limits["position_max"],
+            "velocity_max": limits["velocity_max"],
+            "dt": self._dt,
+            "collision_epsilon": 0.02,
+        }
+        if urdf is not None:
+            kwargs["urdf_path"] = urdf[0]
+            kwargs["root_link"] = urdf[1]
+            kwargs["ee_link"] = urdf[2]
+        pipeline = shield_ffi.ShieldPipeline(**kwargs)
+        self._ffi_pipelines[key] = pipeline
         return pipeline
 
-    def _python_fallback(self, req: EvalInput) -> dict[str, Any]:
+    def _python_fallback(self, req: EvalInput, obstacles: list[dict]) -> dict[str, Any]:
         dof = len(req.action)
         limits = self._get_limits(dof)
         reasons: list[tuple[str, str, float]] = []
@@ -178,6 +219,30 @@ class ShieldEvaluator:
                 )
                 reasons.append(("PHY.JOINT_LIMIT", detail, 1.0))
 
+        # 3) URDF (or EE) AABB vs scene obstacles
+        chain = self._get_python_chain(dof)
+        q_proj = [float(v) for v in projected]
+        for link, obstacle in collision_pairs(q_proj, obstacles, chain):
+            detail = self._rules.render(
+                "PHY.COLLISION",
+                f"pair={link}:{obstacle}",
+                link=link,
+                obstacle=obstacle,
+                min_distance=0.0,
+            )
+            reasons.append(("PHY.COLLISION", detail, 1.0))
+
+        for zone in forbidden_zone_hits(q_proj, obstacles, chain):
+            detail = self._rules.render(
+                "PHY.FORBIDDEN_ZONE",
+                f"ee in forbidden zone {zone}",
+                region_name=zone,
+                x=0.0,
+                y=0.0,
+                z=0.0,
+            )
+            reasons.append(("PHY.FORBIDDEN_ZONE", detail, 1.0))
+
         risk = max((r[2] for r in reasons), default=0.0)
         return {"reasons": reasons, "risk": risk}
 
@@ -193,7 +258,11 @@ class ShieldEvaluator:
             language_task=req.language_task,
             scene_hints=list(req.scene_hints),
             image=req.image,
+            obstacles=req.obstacles,
         )
+
+        obstacles = parse_obstacles(req.obstacles)
+        obstacle_tuples = obstacles_as_tuples(obstacles)
 
         t0 = time.perf_counter()
         ingest_ms = 0.0  # the API layer measures wire-time separately
@@ -221,6 +290,14 @@ class ShieldEvaluator:
         ffi_pipeline = self._get_ffi_pipeline(dof)
         used_ffi = False
         if ffi_pipeline is not None:
+            setter = getattr(ffi_pipeline, "set_obstacles", None)
+            if setter is not None:
+                try:
+                    setter(obstacle_tuples)
+                except TypeError:
+                    # Wheel predates the ontology-tagged tuple: send the plain
+                    # box and accept that zones come back as PHY.COLLISION.
+                    setter([row[:7] for row in obstacle_tuples])
             # Prefer the zero-copy numpy path: borrows `&[f32]` and `&[f64]`
             # straight from contiguous ndarrays instead of paying the Python
             # list → Rust Vec iteration on every call.
@@ -249,7 +326,7 @@ class ShieldEvaluator:
             latency = dict(ffi_decision.latency())
             used_ffi = True
         else:
-            py = self._python_fallback(req)
+            py = self._python_fallback(req, obstacles)
             reasons = py["reasons"]
             risk = py["risk"]
             latency = {
@@ -315,7 +392,17 @@ class ShieldEvaluator:
             float(j) + self._dt * float(a)
             for j, a in zip(req.current_joints, req.action)
         ]
-        skeleton = fk_skeleton(req.current_joints)
+        chain = self._get_python_chain(dof)
+        skeleton: list[list[float]] = []
+        if used_ffi and ffi_pipeline is not None:
+            skel_fn = getattr(ffi_pipeline, "skeleton", None)
+            if skel_fn is not None:
+                try:
+                    skeleton = [list(p) for p in skel_fn(list(req.current_joints))]
+                except Exception:
+                    skeleton = []
+        if not skeleton:
+            skeleton = fk_skeleton_for(req.current_joints, chain)
         traj = shadow.trajectory or [list(req.current_joints), projected]
         return {
             "robot_id": req.robot_id,
@@ -331,8 +418,8 @@ class ShieldEvaluator:
             "projected_joints": projected,
             "skeleton": skeleton,
             "shadow_path": shadow_polyline(traj),
-            "ee": skeleton[-1],
-            "zones": zones_for(ontology_ids),
+            "ee": skeleton[-1] if skeleton else [0.0, 0.0, 0.0],
+            "zones": obstacles or zones_for(ontology_ids),
             "scene_rev": int(req.sequence_id),
             "vfv_backend": vfv.backend,
         }

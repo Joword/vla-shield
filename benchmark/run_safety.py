@@ -63,6 +63,7 @@ def evaluate_scenario(
         "sequence_id": _scenario_id_to_int(scenario.get("scenario_id"), seq_fallback),
         "language_task": scenario.get("task", ""),
         "scene_hints": scenario.get("risk_tags", []),
+        "obstacles": scenario.get("obstacles") or [],
     }).encode()
 
     req = urllib.request.Request(

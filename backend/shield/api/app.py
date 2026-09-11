@@ -122,6 +122,7 @@ async def evaluate_action(payload: dict = Body(default_factory=dict)) -> dict:
     hints_raw = payload.get("scene_hints") or payload.get("risk_tags") or []
     scene_hints = [str(h) for h in hints_raw] if isinstance(hints_raw, list) else []
     language_task = str(payload.get("language_task") or payload.get("task") or "")
+    obstacles_raw = payload.get("obstacles")
     result = app.state.evaluator.evaluate(
         EvalInput(
             robot_id=robot_id,
@@ -132,6 +133,7 @@ async def evaluate_action(payload: dict = Body(default_factory=dict)) -> dict:
             language_task=language_task,
             scene_hints=scene_hints,
             image=_decode_image(payload.get("image")),
+            obstacles=obstacles_raw if isinstance(obstacles_raw, list) else None,
         )
     )
 
