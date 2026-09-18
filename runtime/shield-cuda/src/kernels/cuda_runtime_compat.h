@@ -1,13 +1,17 @@
 //! CUDA runtime header for nvcc *and* editor clang.
 //!
-//! nvcc gets the real `<cuda_runtime.h>`. clangd / host C++ never include it
-//! (or libc) — Windows clangd usually has no MSVC CRT on the include path.
-//! `<<<>>>` / `blockIdx` stay behind `__NVCC__`; the editor uses the stubs.
+//! nvcc gets the real `<cuda_runtime.h>` plus hosted `<mutex>` / CRT.
+//! clangd / `-ffreestanding` never include those (Windows clangd has no
+//! MSVC CRT on the path). `<<<>>>` / `blockIdx` stay behind `__NVCC__`;
+//! the editor uses the stubs below.
 
 #pragma once
 
 #ifdef __NVCC__
 #include <cuda_runtime.h>
+#include <mutex>
+#include <stdlib.h>
+#include <string.h>
 #define SHIELD_CUDA_RUNTIME 1
 #endif
 
@@ -52,6 +56,28 @@ struct dim3 {
 extern "C" void* malloc(size_t);
 extern "C" void free(void*);
 extern "C" void* memcpy(void*, const void*, size_t);
+extern "C" void* memset(void*, int, size_t);
+
+namespace std {
+
+struct mutex {
+    void lock() {}
+    void unlock() {}
+};
+
+template <typename Mutex>
+class lock_guard {
+public:
+    explicit lock_guard(Mutex& m) : m_(m) { m_.lock(); }
+    ~lock_guard() { m_.unlock(); }
+    lock_guard(const lock_guard&) = delete;
+    lock_guard& operator=(const lock_guard&) = delete;
+
+private:
+    Mutex& m_;
+};
+
+}  // namespace std
 
 inline cudaError_t cudaMalloc(void** p, size_t n) {
     if (p == nullptr) {

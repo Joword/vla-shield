@@ -92,7 +92,7 @@ async def lifespan(fastapi_app: FastAPI) -> AsyncGenerator[None, None]:
 
 app = FastAPI(
     title="VLA-Shield Ops API",
-    version="0.5.7",
+    version="0.6.4",
     lifespan=lifespan,
 )
 
@@ -128,6 +128,8 @@ async def evaluate_action(  # pylint: disable=too-many-locals
         sequence_id = 0
     current_raw = payload.get("current_joints")
     current = [float(v) for v in current_raw] if isinstance(current_raw, list) else []
+    prev_raw = payload.get("prev_velocity")
+    prev_velocity = [float(v) for v in prev_raw] if isinstance(prev_raw, list) else []
     hints_raw = payload.get("scene_hints") or payload.get("risk_tags") or []
     scene_hints = [str(h) for h in hints_raw] if isinstance(hints_raw, list) else []
     language_task = str(payload.get("language_task") or payload.get("task") or "")
@@ -143,6 +145,7 @@ async def evaluate_action(  # pylint: disable=too-many-locals
             scene_hints=scene_hints,
             image=_decode_image(payload.get("image")),
             obstacles=obstacles_raw if isinstance(obstacles_raw, list) else None,
+            prev_velocity=prev_velocity,
         )
     )
 

@@ -4,29 +4,13 @@
 //! tagged reasons so the arbiter can keep BLOCK > CLAMP > WARN. Don't fold them
 //! into a generic `project()` error — FFI used to slam that into `PHY.JOINT_LIMIT`.
 
+use crate::calibration::phy_calibration;
+use crate::DynProposal;
 use shield_core::action::ActionVector;
 use shield_core::arbiter::ArbiterReason;
 use shield_core::ontology::physical;
 use shield_core::types::JointLimits;
-use shield_urdf::{UrdfKinematicChain, SINGULARITY_MANIPULABILITY_THRESHOLD};
-
-use crate::DynProposal;
-
-/// Last three joints: wrist spikes look like a lot of torque. Proximal joints
-/// get a tiny coefficient so a UR5 base-velocity spike (PHY-003, 10 rad/s vs
-/// 50 Nm default) doesn't masquerade as overload.
-const DISTAL_INERTIA: f64 = 24.0;
-const PROXIMAL_INERTIA: f64 = 2.0;
-
-/// Last channel of an 8+ DoF command is treated as base linear accel.
-const MOBILE_BASE_ACCEL_LIMIT: f64 = 1.5;
-const COM_HEIGHT_M: f64 = 0.80;
-const SUPPORT_HALF_M: f64 = 0.25;
-const TIPOVER_MARGIN_M: f64 = 0.05;
-const G: f64 = 9.81;
-
-/// Elbow-lock heuristic for 7-DoF arms (Franka joint 4 ≈ 0).
-const ELBOW_LOCK_RAD: f64 = 0.08;
+use shield_urdf::UrdfKinematicChain;
 
 /// Singularity / tip-over / overload reasons for a projected state.
 ///
@@ -57,6 +41,7 @@ pub fn extra_physical_reasons(
 }
 
 fn singularity_reason(q: &[f64], chain: Option<&UrdfKinematicChain>) -> Option<ArbiterReason> {
+    let cal = &phy_calibration().singularity;
     let mut manip: Option<f64> = None;
     if let Some(chain) = chain {
         if chain.dof() == q.len() {
@@ -65,11 +50,7 @@ fn singularity_reason(q: &[f64], chain: Option<&UrdfKinematicChain>) -> Option<A
             }
         }
     }
-    // Numerical floor = near-rank-deficient Jacobian. The ontology 0.05
-    // threshold is the wrong scale for this simplified Panda URDF (ready
-    // poses sit around 0.04), so 7-DoF Franka gold cases use elbow-lock
-    // instead (joint 4 ≈ 0).
-    let below = manip.map(|m| m < 1e-3).unwrap_or(false);
+    let below = manip.map(|m| m < cal.jacobian_floor).unwrap_or(false);
     let elbow = near_elbow_lock(q);
     if !below && !elbow {
         return None;
@@ -78,33 +59,39 @@ fn singularity_reason(q: &[f64], chain: Option<&UrdfKinematicChain>) -> Option<A
     Some(ArbiterReason {
         ontology_id: physical::singularity(),
         detail: format!(
-            "positional manipulability {m:.4} below threshold {SINGULARITY_MANIPULABILITY_THRESHOLD:.4}"
+            "positional manipulability {m:.4} below threshold {:.4}",
+            cal.ontology_manipulability
         ),
         score: 1.0,
     })
 }
 
 fn near_elbow_lock(q: &[f64]) -> bool {
-    // 7-DoF Panda only: joint 4 (index 3) near 0 is the textbook elbow lock.
-    // 8-DoF mobile stacks also have a joint at index 3; don't inherit this.
-    q.len() == 7 && q[3].abs() < ELBOW_LOCK_RAD
+    let cal = &phy_calibration().singularity;
+    q.len() == cal.elbow_lock_dof
+        && q
+            .get(cal.elbow_lock_joint_index)
+            .map(|v| v.abs() < cal.elbow_lock_rad)
+            .unwrap_or(false)
 }
 
 fn tipover_reason(action: &ActionVector, _limits: &JointLimits) -> Option<ArbiterReason> {
-    if action.dim() < 8 {
+    let cal = &phy_calibration().tipover;
+    if action.dim() < cal.mobile_min_dof {
         return None;
     }
     let a = action.data[action.dim() - 1] as f64;
-    let zmp_y = COM_HEIGHT_M * a / G;
+    let zmp_y = cal.com_height_m * a / cal.g;
     let zmp_x = 0.0;
-    let outside_polygon = zmp_y.abs() + TIPOVER_MARGIN_M > SUPPORT_HALF_M;
-    if a.abs() <= MOBILE_BASE_ACCEL_LIMIT && !outside_polygon {
+    let outside_polygon = zmp_y.abs() + cal.margin_m > cal.support_half_m;
+    if a.abs() <= cal.base_accel_limit && !outside_polygon {
         return None;
     }
     Some(ArbiterReason {
         ontology_id: physical::tipover(),
         detail: format!(
-            "base accel {a:.3} m/s² exceeds {MOBILE_BASE_ACCEL_LIMIT:.3}; ZMP at ({zmp_x:.3}, {zmp_y:.3}) m"
+            "base accel {a:.3} m/s² exceeds {:.3}; ZMP at ({zmp_x:.3}, {zmp_y:.3}) m",
+            cal.base_accel_limit
         ),
         score: 1.0,
     })
@@ -115,20 +102,21 @@ fn overload_reason(
     q: &[f64],
     limits: &JointLimits,
 ) -> Option<ArbiterReason> {
+    let cal = &phy_calibration().overload;
     let n = action.dim();
     if n == 0 || q.len() != n || limits.torque_max.len() != n {
         return None;
     }
-    let distal_from = n.saturating_sub(3);
+    let distal_from = n.saturating_sub(cal.distal_joints);
     let mut worst: Option<(usize, f64, f64)> = None;
     for i in 0..n {
         let v = action.data[i] as f64;
         let inertia = if i >= distal_from {
-            DISTAL_INERTIA
+            cal.distal_inertia
         } else {
-            PROXIMAL_INERTIA
+            cal.proximal_inertia
         };
-        let gravity = 4.0 * (n - 1 - i) as f64 * q[i].sin().abs();
+        let gravity = cal.gravity_coeff * (n - 1 - i) as f64 * q[i].sin().abs();
         let tau = inertia * v.abs() + gravity;
         let nominal = limits.torque_max[i];
         if tau > nominal {

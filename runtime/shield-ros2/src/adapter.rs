@@ -10,12 +10,14 @@ use shield_core::types::{Aabb, JointLimits};
 use crate::pipeline::SafetyPipeline;
 
 /// Incoming VLA command. Same shape as ROS `ActionProposal`.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct ActionProposal {
     pub sequence_id: u64,
     pub t_ns: u64,
     pub action: Vec<f32>,
     pub current_joints: Vec<f64>,
+    /// Last tick's joint velocity. Empty skips acceleration clamp.
+    pub prev_velocity: Vec<f32>,
 }
 
 /// Outgoing verdict. Same shape as ROS `SafetyDecision`.
@@ -117,6 +119,7 @@ impl SafetyPipeline {
             proposal.sequence_id,
             proposal.action.clone(),
         );
+        let prev: Vec<f64> = proposal.prev_velocity.iter().map(|v| *v as f64).collect();
         let event = self.evaluate(
             &action,
             &proposal.current_joints,
@@ -124,6 +127,7 @@ impl SafetyPipeline {
             scene,
             semantic,
             None,
+            &prev,
         );
         match event.decision {
             ArbiterDecision::Pass { action, .. } => SafetyDecision {
@@ -145,7 +149,13 @@ impl SafetyPipeline {
                     .map(|r| r.ontology_id.to_string())
                     .collect();
                 let safe_action = if decision == SafetyDecision::CLAMP {
-                    self.clamped_action(&action, &proposal.current_joints, limits, scene)
+                    self.clamped_action(
+                        &action,
+                        &proposal.current_joints,
+                        limits,
+                        scene,
+                        &prev,
+                    )
                         .unwrap_or(safe_fallback.data)
                 } else {
                     safe_fallback.data
@@ -196,6 +206,7 @@ mod tests {
                 t_ns: 0,
                 action: vec![0.1, 0.0, -0.05],
                 current_joints: vec![0.0, 0.0, 0.0],
+                prev_velocity: vec![],
             },
             &lim,
             &scene,
@@ -215,7 +226,7 @@ mod tests {
         lim.velocity_max = vec![1.0];
         let action = ActionVector::new(0, 1, vec![10.0]);
         let out = pipe
-            .clamped_action(&action, &[0.0], &lim, &SceneGraph::default())
+            .clamped_action(&action, &[0.0], &lim, &SceneGraph::default(), &[])
             .expect("projector accepts the state");
         // A plain velocity_max clamp would emit 1.0 rad/s and overshoot the stop.
         assert!(
@@ -260,6 +271,7 @@ mod tests {
                 t_ns: 0,
                 action: vec![0.0],
                 current_joints: vec![0.0],
+                prev_velocity: vec![],
             },
             &lim,
             &scene,
@@ -280,6 +292,7 @@ mod tests {
                 t_ns: 0,
                 action,
                 current_joints: vec![0.0, 0.0, 0.0, 0.02, 0.0, 0.02, 0.0],
+                prev_velocity: vec![],
             },
             &limits(7),
             &SceneGraph::default(),
@@ -300,6 +313,7 @@ mod tests {
                 t_ns: 0,
                 action,
                 current_joints: vec![0.0; 8],
+                prev_velocity: vec![],
             },
             &limits(8),
             &SceneGraph::default(),
@@ -322,6 +336,7 @@ mod tests {
                 t_ns: 0,
                 action,
                 current_joints: vec![0.0, 0.3, 0.0, -1.0, 0.0, 1.5, 0.8],
+                prev_velocity: vec![],
             },
             &lim,
             &SceneGraph::default(),
@@ -329,5 +344,21 @@ mod tests {
         );
         assert_eq!(out.decision, SafetyDecision::BLOCK);
         assert!(out.ontology_ids.iter().any(|id| id == "PHY.OVERLOAD"));
+    }
+
+    #[test]
+    fn accel_clamp_uses_prev_velocity() {
+        let pipe = SafetyPipeline::with_defaults(RuntimeConfig::default());
+        let mut lim = limits(1);
+        lim.acceleration_max = vec![5.0];
+        lim.torque_max = vec![1.0e6];
+        let action = ActionVector::new(0, 1, vec![999.0]);
+        let out = pipe
+            .clamped_action(&action, &[0.0], &lim, &SceneGraph::default(), &[0.0])
+            .expect("projector accepts the state");
+        assert!(
+            (out[0] as f64 - 0.05).abs() < 1e-6,
+            "clamped action {out:?}"
+        );
     }
 }

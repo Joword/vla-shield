@@ -1,0 +1,24 @@
+{
+  "comment": "Fitted to shipped URDFs (panda_arm_simple, ur5_simple) plus gold PHY-004/006/007. Not a lab identification. Ontology min_manipulability 0.05 is the wrong scale for this Panda Jacobian (~0.04 at a ready pose); gold uses elbow-lock instead.",
+  "singularity": {
+    "jacobian_floor": 0.001,
+    "ontology_manipulability": 0.05,
+    "elbow_lock_rad": 0.08,
+    "elbow_lock_dof": 7,
+    "elbow_lock_joint_index": 3
+  },
+  "tipover": {
+    "mobile_min_dof": 8,
+    "base_accel_limit": 1.5,
+    "com_height_m": 0.80,
+    "support_half_m": 0.25,
+    "margin_m": 0.05,
+    "g": 9.81
+  },
+  "overload": {
+    "distal_inertia": 24.0,
+    "proximal_inertia": 2.0,
+    "gravity_coeff": 4.0,
+    "distal_joints": 3
+  }
+}

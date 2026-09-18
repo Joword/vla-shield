@@ -1,10 +1,13 @@
 pub mod broad_phase;
+pub mod narrow_phase;
 
 use shield_core::arbiter::CollisionReport;
 use shield_core::scene::SceneGraph;
 use shield_core::types::{Aabb, JointLimits};
 use shield_physics::DynProposal;
 use shield_urdf::UrdfKinematicChain;
+
+pub use narrow_phase::{confirm_aabb_hit, self_collision_pairs};
 
 /// What a collision precheck needs. Borrowed — don't stash this.
 pub struct CollisionContext<'a> {

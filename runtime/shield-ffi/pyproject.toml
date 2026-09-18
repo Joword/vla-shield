@@ -1,0 +1,13 @@
+[build-system]
+requires = ["maturin>=1.4,<2"]
+build-backend = "maturin"
+
+[project]
+name = "shield-ffi"
+version = "0.6.4"
+description = "PyO3 hot-path pipeline for VLA-Shield"
+requires-python = ">=3.10"
+license = { text = "Apache-2.0" }
+
+[tool.maturin]
+module-name = "shield_ffi"

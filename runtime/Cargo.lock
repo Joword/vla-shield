@@ -1564,11 +1564,12 @@ dependencies = [
 
 [[package]]
 name = "shield-collision"
-version = "0.1.0"
+version = "0.6.4"
 dependencies = [
  "nalgebra",
  "pretty_assertions",
  "shield-core",
+ "shield-cuda",
  "shield-physics",
  "shield-urdf",
  "thiserror",
@@ -1577,7 +1578,7 @@ dependencies = [
 
 [[package]]
 name = "shield-core"
-version = "0.1.0"
+version = "0.6.4"
 dependencies = [
  "nalgebra",
  "pretty_assertions",
@@ -1590,7 +1591,7 @@ dependencies = [
 
 [[package]]
 name = "shield-cuda"
-version = "0.1.0"
+version = "0.6.4"
 dependencies = [
  "cc",
  "thiserror",
@@ -1599,7 +1600,7 @@ dependencies = [
 
 [[package]]
 name = "shield-ffi"
-version = "0.1.0"
+version = "0.6.4"
 dependencies = [
  "numpy",
  "pyo3",
@@ -1615,7 +1616,7 @@ dependencies = [
 
 [[package]]
 name = "shield-io"
-version = "0.1.0"
+version = "0.6.4"
 dependencies = [
  "redis",
  "serde",
@@ -1630,10 +1631,12 @@ dependencies = [
 
 [[package]]
 name = "shield-physics"
-version = "0.1.0"
+version = "0.6.4"
 dependencies = [
  "nalgebra",
  "pretty_assertions",
+ "serde",
+ "serde_json",
  "shield-core",
  "shield-urdf",
  "thiserror",
@@ -1642,7 +1645,7 @@ dependencies = [
 
 [[package]]
 name = "shield-ros2"
-version = "0.1.0"
+version = "0.6.4"
 dependencies = [
  "nalgebra",
  "rclrs",
@@ -1661,7 +1664,7 @@ dependencies = [
 
 [[package]]
 name = "shield-shadow"
-version = "0.1.0"
+version = "0.6.4"
 dependencies = [
  "serde",
  "serde_json",
@@ -1673,7 +1676,7 @@ dependencies = [
 
 [[package]]
 name = "shield-urdf"
-version = "0.1.0"
+version = "0.6.4"
 dependencies = [
  "nalgebra",
  "quick-xml",

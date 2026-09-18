@@ -30,6 +30,17 @@ impl UrdfKinematicChain {
         self.joints.len()
     }
 
+    /// Use the arm prefix when `q` is longer than the chain (mobile-base extra DoF).
+    fn q_arm<'a>(&self, q: &'a [f64]) -> Result<&'a [f64], UrdfError> {
+        if q.len() < self.dof() {
+            return Err(UrdfError::DimensionMismatch {
+                expected: self.dof(),
+                got: q.len(),
+            });
+        }
+        Ok(&q[..self.dof()])
+    }
+
     pub fn joints(&self) -> &[JointSpec] {
         &self.joints
     }
@@ -44,12 +55,7 @@ impl UrdfKinematicChain {
 
     /// Link frames from root (identity) through each child, in chain order.
     pub fn link_frames(&self, q: &[f64]) -> Result<Vec<(String, Isometry3<f64>)>, UrdfError> {
-        if q.len() != self.dof() {
-            return Err(UrdfError::DimensionMismatch {
-                expected: self.dof(),
-                got: q.len(),
-            });
-        }
+        let q = self.q_arm(q)?;
         let mut frames = Vec::with_capacity(self.joints.len() + 1);
         let mut world = Isometry3::identity();
         if let Some(root) = self.root_link() {
@@ -88,12 +94,7 @@ impl UrdfKinematicChain {
 
     /// EE isometry in the root link frame. Same product ROS uses.
     pub fn forward_isometry(&self, q: &[f64]) -> Result<Isometry3<f64>, UrdfError> {
-        if q.len() != self.dof() {
-            return Err(UrdfError::DimensionMismatch {
-                expected: self.dof(),
-                got: q.len(),
-            });
-        }
+        let q = self.q_arm(q)?;
         let mut world = Isometry3::identity();
         for (i, j) in self.joints.iter().enumerate() {
             world *= joint_transform(j, q[i]);
@@ -117,12 +118,7 @@ impl UrdfKinematicChain {
 
     /// Positional manipulability `sqrt(det(J J^T))` via a numerical 3×n Jacobian.
     pub fn positional_manipulability(&self, q: &[f64]) -> Result<f64, UrdfError> {
-        if q.len() != self.dof() {
-            return Err(UrdfError::DimensionMismatch {
-                expected: self.dof(),
-                got: q.len(),
-            });
-        }
+        let q = self.q_arm(q)?;
         let n = q.len();
         if n == 0 {
             return Ok(0.0);
@@ -259,5 +255,22 @@ mod tests {
         let dx = (ee_z.x - ee_s.x).abs();
         let dy = (ee_z.y - ee_s.y).abs();
         assert!(dx + dy > 0.05, "yaw should move the distal AABB");
+    }
+
+    #[test]
+    fn extra_base_dofs_use_arm_prefix() {
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../dataset/urdf/ur5_simple.urdf");
+        let robot = UrdfRobot::from_file(&path).expect("ur5");
+        let chain =
+            UrdfKinematicChain::from_robot(&robot, "base_link", "wrist_3_link").expect("chain");
+        let q6 = [0.0, -1.0, 1.2, -1.2, -1.2, 0.0];
+        let mut q8 = q6.to_vec();
+        q8.extend_from_slice(&[0.0, 0.1]);
+        let a = chain.ee_position(&q6).unwrap();
+        let b = chain.ee_position(&q8).unwrap();
+        assert!((a[0] - b[0]).abs() < 1e-12);
+        assert!((a[1] - b[1]).abs() < 1e-12);
+        assert!((a[2] - b[2]).abs() < 1e-12);
     }
 }

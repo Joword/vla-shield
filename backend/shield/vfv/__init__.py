@@ -8,11 +8,12 @@ from shield.vfv.predictor import (
     VFVResult,
 )
 from shield.vfv.semantic import SemanticVFVPredictor
-from shield.vfv.image_cues import image_cue_scores
+from shield.vfv.image_cues import cue_config, image_cue_scores
 
 __all__ = [
     "DummyVFVPredictor",
     "SemanticVFVPredictor",
+    "cue_config",
     "image_cue_scores",
     "ShadowSimPredictor",
     "UrdfShadowConfig",

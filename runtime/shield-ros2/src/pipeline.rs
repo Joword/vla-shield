@@ -85,6 +85,7 @@ impl SafetyPipeline {
         current_joints: &[f64],
         limits: &JointLimits,
         scene: &SceneGraph,
+        prev_velocity: &[f64],
     ) -> Option<Vec<f32>> {
         if self.config.dt <= 0.0 {
             return None;
@@ -97,6 +98,7 @@ impl SafetyPipeline {
             urdf_chain: self.urdf_chain.as_ref(),
             forbidden_zones: &self.forbidden_zones,
             semantic_constraints: &[],
+            prev_velocity,
         };
         let proposal = self.projector.project(&ctx, action).ok()?;
         Some(
@@ -126,6 +128,7 @@ impl SafetyPipeline {
         scene: &SceneGraph,
         semantic: &SemanticRiskReport,
         shadow: Option<&ShadowResult>,
+        prev_velocity: &[f64],
     ) -> SafetyEvent {
         let t0 = Instant::now();
 
@@ -141,6 +144,7 @@ impl SafetyPipeline {
             urdf_chain: chain_ref,
             forbidden_zones: &self.forbidden_zones,
             semantic_constraints: &[],
+            prev_velocity,
         };
 
         let proposal = self.projector.project(&proj_ctx, action);

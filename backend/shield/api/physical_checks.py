@@ -1,22 +1,60 @@
 """Python copies of shield-physics::checks.
 
 So the FastAPI fallback can still fire PHY.SINGULARITY / PHY.TIPOVER /
-PHY.OVERLOAD (gold PHY-004 / 006 / 007) without the Rust ext. Keep the
-numbers identical to runtime/shield-physics/src/checks.rs or gold drifts.
+PHY.OVERLOAD (gold PHY-004 / 006 / 007) without the Rust ext. Numbers come
+from dataset/ontology/phy_calibration.json — same file Rust include_str!s.
 """
 
 from __future__ import annotations
 
+import json
 import math
+from functools import lru_cache
+from pathlib import Path
 from typing import Any
 
-SINGULARITY_MANIPULABILITY_THRESHOLD = 0.05
-ELBOW_LOCK_RAD = 0.08
-DISTAL_INERTIA = 24.0
-PROXIMAL_INERTIA = 2.0
-MOBILE_BASE_ACCEL_LIMIT = 1.5
-COM_HEIGHT_M = 0.80
-G = 9.81
+_CAL_PATH = Path(__file__).resolve().parents[3] / "dataset" / "ontology" / "phy_calibration.json"
+
+
+@lru_cache(maxsize=4)
+def load_phy_calibration(path: str | None = None) -> dict[str, Any]:
+    """Shared coefficients. `path` overrides the shipped JSON."""
+    p = Path(path) if path else _CAL_PATH
+    data = json.loads(p.read_text(encoding="utf-8"))
+    if not isinstance(data, dict):
+        raise ValueError("phy_calibration.json must be an object")
+    return data
+
+
+def phy_calibration() -> dict[str, Any]:
+    """Cached shipped calibration."""
+    return load_phy_calibration()
+
+
+def clamp_joint_velocity(
+    action: list[float],
+    velocity_max: list[float],
+    *,
+    prev_velocity: list[float] | None = None,
+    acceleration_max: list[float] | None = None,
+    dt: float = 0.0,
+) -> list[float]:
+    """Vel cap, then |Δv| ≤ a_max·dt when prev_velocity length matches DoF."""
+    n = len(action)
+    prev = list(prev_velocity or [])
+    use_accel = len(prev) == n and dt > 0.0 and acceleration_max is not None
+    out: list[float] = []
+    for i, raw in enumerate(action):
+        vmax = float(velocity_max[i]) if i < len(velocity_max) else float("inf")
+        vel = max(-vmax, min(vmax, float(raw)))
+        if use_accel:
+            a_max = float(acceleration_max[i]) if i < len(acceleration_max) else float("inf")
+            if math.isfinite(a_max):
+                da = a_max * dt
+                p = float(prev[i])
+                vel = max(p - da, min(p + da, vel))
+        out.append(vel)
+    return out
 
 
 def _ee_xyz(chain: Any, q: list[float]) -> list[float] | None:
@@ -47,7 +85,6 @@ def positional_manipulability(chain: Any, q: list[float]) -> float | None:
         if p1 is None:
             return None
         j.append([(p1[k] - p0[k]) / eps for k in range(3)])
-    # gram = J Jᵀ (3×3)
     gram = [[0.0] * 3 for _ in range(3)]
     for r in range(3):
         for c in range(3):
@@ -64,28 +101,33 @@ Reason = tuple[str, str, float]
 
 
 def _singularity_reason(q: list[float], chain: Any | None) -> Reason | None:
+    cal = phy_calibration()["singularity"]
     manip = positional_manipulability(chain, q)
-    elbow = len(q) == 7 and abs(q[3]) < ELBOW_LOCK_RAD
-    below = manip is not None and manip < 1e-3
+    elbow = (
+        len(q) == int(cal["elbow_lock_dof"])
+        and abs(q[int(cal["elbow_lock_joint_index"])]) < float(cal["elbow_lock_rad"])
+    )
+    below = manip is not None and manip < float(cal["jacobian_floor"])
     if not below and not elbow:
         return None
     m = 0.0 if manip is None else manip
     detail = (
         f"positional manipulability {m:.4f} below threshold "
-        f"{SINGULARITY_MANIPULABILITY_THRESHOLD:.4f}"
+        f"{float(cal['ontology_manipulability']):.4f}"
     )
     return ("PHY.SINGULARITY", detail, 1.0)
 
 
 def _tipover_reason(action: list[float]) -> Reason | None:
-    if len(action) < 8:
+    cal = phy_calibration()["tipover"]
+    if len(action) < int(cal["mobile_min_dof"]):
         return None
     accel = float(action[-1])
-    if abs(accel) <= MOBILE_BASE_ACCEL_LIMIT:
+    if abs(accel) <= float(cal["base_accel_limit"]):
         return None
-    zmp_y = COM_HEIGHT_M * accel / G
+    zmp_y = float(cal["com_height_m"]) * accel / float(cal["g"])
     detail = (
-        f"base accel {accel:.3f} m/s² exceeds {MOBILE_BASE_ACCEL_LIMIT:.3f}; "
+        f"base accel {accel:.3f} m/s² exceeds {float(cal['base_accel_limit']):.3f}; "
         f"ZMP at (0.000, {zmp_y:.3f}) m"
     )
     return ("PHY.TIPOVER", detail, 1.0)
@@ -97,14 +139,17 @@ def _overload_reason(  # pylint: disable=too-many-locals
     tau_cap: list[float],
     names: list[str],
 ) -> Reason | None:
+    cal = phy_calibration()["overload"]
     n = len(action)
-    distal_from = max(0, n - 3)
+    distal_from = max(0, n - int(cal["distal_joints"]))
     worst_i: int | None = None
     worst_tau = 0.0
     worst_nominal = 0.0
     for i, velocity in enumerate(action):
-        inertia = DISTAL_INERTIA if i >= distal_from else PROXIMAL_INERTIA
-        gravity = 4.0 * (n - 1 - i) * abs(math.sin(q[i]))
+        inertia = (
+            float(cal["distal_inertia"]) if i >= distal_from else float(cal["proximal_inertia"])
+        )
+        gravity = float(cal["gravity_coeff"]) * (n - 1 - i) * abs(math.sin(q[i]))
         tau = inertia * abs(float(velocity)) + gravity
         nominal = float(tau_cap[i])
         if tau > nominal and (worst_i is None or tau > worst_tau):

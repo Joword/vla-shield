@@ -1,0 +1,11 @@
+{
+  "comment": "Visual-cue floors aligned with dataset/ontology/rules_semantic.json min_score. Override with SHIELD_VFV_CUES.",
+  "min_side_px": 32,
+  "human_velocity_threshold": 0.3,
+  "cues": {
+    "SEM.HEAT_SOURCE": { "fraction": 0.08, "min_score": 0.7 },
+    "SEM.SHARP_OBJECT": { "fraction": 0.10, "min_score": 0.6 },
+    "SEM.LIQUID_ELECTRICAL": { "fraction": 0.12, "min_score": 0.65 },
+    "SEM.HUMAN_PROXIMITY": { "fraction": 0.18, "min_score": 0.5 }
+  }
+}

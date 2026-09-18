@@ -29,7 +29,7 @@ from shield.api.kinematics import (
     zones_for,
     UrdfChain,
 )
-from shield.api.physical_checks import extra_physical_reasons
+from shield.api.physical_checks import clamp_joint_velocity, extra_physical_reasons
 from shield.api.rule_engine import RuleRegistry
 from shield.vfv.predictor import ShadowSimPredictor, UrdfShadowConfig
 from shield.vfv.semantic import SemanticVFVPredictor
@@ -57,6 +57,7 @@ class EvalInput:
     scene_hints: list[str] = field(default_factory=list)
     image: np.ndarray | None = None
     obstacles: list[dict] | None = None
+    prev_velocity: list[float] = field(default_factory=list)
 
 
 def _coerce_joints(current_joints: list[float], dof: int) -> list[float]:
@@ -195,7 +196,7 @@ class ShieldEvaluator:
         limits = self._get_limits(dof)
         reasons: list[tuple[str, str, float]] = []
 
-        # Velocity cap.
+        # Velocity cap on the raw command.
         for i, v in enumerate(req.action):
             vmax = limits["velocity_max"][i]
             if abs(v) > vmax:
@@ -208,9 +209,17 @@ class ShieldEvaluator:
                 )
                 reasons.append(("PHY.VELOCITY_LIMIT", detail, 0.6))
 
+        clamped = clamp_joint_velocity(
+            list(req.action),
+            limits["velocity_max"],
+            prev_velocity=list(req.prev_velocity),
+            acceleration_max=limits["acceleration_max"],
+            dt=self._dt,
+        )
+
         # One-step projected position vs joint limits.
         projected = np.array(req.current_joints, dtype=np.float64) + self._dt * np.array(
-            req.action, dtype=np.float64
+            clamped, dtype=np.float64
         )
         lower = np.array(limits["position_min"], dtype=np.float64)
         upper = np.array(limits["position_max"], dtype=np.float64)
@@ -255,7 +264,7 @@ class ShieldEvaluator:
             reasons.append(("PHY.FORBIDDEN_ZONE", detail, 1.0))
 
         for oid, detail, score in extra_physical_reasons(
-            list(req.action),
+            list(clamped),
             list(req.current_joints),
             torque_max=limits["torque_max"],
             chain=chain,
@@ -285,6 +294,7 @@ class ShieldEvaluator:
             scene_hints=list(req.scene_hints),
             image=req.image,
             obstacles=req.obstacles,
+            prev_velocity=list(req.prev_velocity),
         )
 
         obstacles = parse_obstacles(req.obstacles)
@@ -329,19 +339,43 @@ class ShieldEvaluator:
             if evaluate_numpy is not None:
                 action_np = np.ascontiguousarray(req.action, dtype=np.float32)
                 current_np = np.ascontiguousarray(req.current_joints, dtype=np.float64)
-                ffi_decision = evaluate_numpy(
-                    action_np,
-                    current_np,
-                    t_ns=req.t_ns,
-                    sequence_id=req.sequence_id,
-                )
+                kwargs_np: dict[str, Any] = {
+                    "t_ns": req.t_ns,
+                    "sequence_id": req.sequence_id,
+                }
+                if req.prev_velocity:
+                    kwargs_np["prev_velocity"] = np.ascontiguousarray(
+                        req.prev_velocity, dtype=np.float32
+                    )
+                try:
+                    ffi_decision = evaluate_numpy(action_np, current_np, **kwargs_np)
+                except TypeError:
+                    ffi_decision = evaluate_numpy(
+                        action_np,
+                        current_np,
+                        t_ns=req.t_ns,
+                        sequence_id=req.sequence_id,
+                    )
             else:
-                ffi_decision = ffi_pipeline.evaluate(
-                    req.action,
-                    req.current_joints,
-                    t_ns=req.t_ns,
-                    sequence_id=req.sequence_id,
-                )
+                eval_kwargs: dict[str, Any] = {
+                    "t_ns": req.t_ns,
+                    "sequence_id": req.sequence_id,
+                }
+                if req.prev_velocity:
+                    eval_kwargs["prev_velocity"] = [float(v) for v in req.prev_velocity]
+                try:
+                    ffi_decision = ffi_pipeline.evaluate(
+                        req.action,
+                        req.current_joints,
+                        **eval_kwargs,
+                    )
+                except TypeError:
+                    ffi_decision = ffi_pipeline.evaluate(
+                        req.action,
+                        req.current_joints,
+                        t_ns=req.t_ns,
+                        sequence_id=req.sequence_id,
+                    )
             raw_reasons = list(ffi_decision.reasons)
             reasons = [
                 (str(oid), str(detail), float(score)) for oid, detail, score in raw_reasons

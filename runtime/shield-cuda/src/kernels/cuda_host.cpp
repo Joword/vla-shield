@@ -1,24 +1,26 @@
 // Host glue: Rust FFI ↔ CUDA kernel.
 //
-// Two C-ABI tiers:
+// Clamp:
+//   1. One-shot shield_cuda_clamp — alloc / copy / free every call.
+//   2. Context shield_cuda_ctx_*  — cached device + pinned buffers + stream.
 //
-//   1. One-shot:
-//        int shield_cuda_clamp(host*, host*, host*, n);
-//      Alloc / copy / free every call. Fine for tests, not the hot path.
-//
-//   2. Context (the hot path):
-//        int  shield_cuda_ctx_create(size_t capacity, void** out_ctx);
-//        void shield_cuda_ctx_destroy(void* ctx);
-//        int  shield_cuda_ctx_clamp(void* ctx, host*, host*, host*, n);
-//      Caches three device buffers, three pinned host buffers, one stream.
-//      n <= capacity reuses them; n > capacity grows.
-//
-// Small-n CPU bypass lives in Rust (`CudaCtx::clamp_into`). This file always
-// runs the GPU path, so A/B benches can force it with `set_min_gpu_n(0)`.
+// AABB:
+//   shield_cuda_aabb_mask / hits. Below kMinGpuPairs the host fill runs.
+//   At ≥64 pairs: grow-only AabbDeviceScratch + pair-parallel kernel.
+//   Any GPU failure falls back to host fill (never fail closed).
 
 #include "cuda_runtime_compat.h"
-#include <stddef.h>
-#include <string.h>
+
+extern "C" int shield_cuda_launch_aabb_mask(
+    const float* device_link_min,
+    const float* device_link_max,
+    size_t n_links,
+    const float* device_obs_min,
+    const float* device_obs_max,
+    size_t n_obs,
+    unsigned char* device_mask,
+    cudaStream_t stream
+);
 
 extern "C" int shield_cuda_launch_clamp(
     const float* device_input,
@@ -26,6 +28,16 @@ extern "C" int shield_cuda_launch_clamp(
     float* device_output,
     size_t n,
     cudaStream_t stream
+);
+
+extern "C" void shield_cuda_aabb_mask_host(
+    const float* link_min,
+    const float* link_max,
+    size_t n_links,
+    const float* obs_min,
+    const float* obs_max,
+    size_t n_obs,
+    unsigned char* mask
 );
 
 namespace {
@@ -209,10 +221,141 @@ extern "C" int shield_cuda_ctx_clamp(
     return 0;
 }
 
-// AABB overlap: N link boxes vs M obstacles. Packed xyz-min / xyz-max
-// (3 * n). hits[i] = 1 if link i hits anything. Typical N,M are tiny, so
-// this stays on the host even in the CUDA build. One C ABI so collision
-// doesn't care which backend compiled.
+// AABB overlap: N×M mask (row-major). Below kMinGpuPairs we skip the
+// launch — a 7-link × 4-obstacle scene is faster on the host. The kernel
+// is still there for dense scenes / benches (force by packing ≥64 pairs).
+static const size_t kMinGpuPairs = 64;
+
+struct AabbDeviceScratch {
+    size_t n_links_cap = 0;
+    size_t n_obs_cap = 0;
+    float* d_lmin = nullptr;
+    float* d_lmax = nullptr;
+    float* d_omin = nullptr;
+    float* d_omax = nullptr;
+    unsigned char* d_mask = nullptr;
+};
+
+static AabbDeviceScratch g_aabb;
+static std::mutex g_aabb_mu;
+
+static void aabb_scratch_free(AabbDeviceScratch* s) {
+    if (s->d_lmin) { cudaFree(s->d_lmin); s->d_lmin = nullptr; }
+    if (s->d_lmax) { cudaFree(s->d_lmax); s->d_lmax = nullptr; }
+    if (s->d_omin) { cudaFree(s->d_omin); s->d_omin = nullptr; }
+    if (s->d_omax) { cudaFree(s->d_omax); s->d_omax = nullptr; }
+    if (s->d_mask) { cudaFree(s->d_mask); s->d_mask = nullptr; }
+    s->n_links_cap = 0;
+    s->n_obs_cap = 0;
+}
+
+static int aabb_scratch_reserve(AabbDeviceScratch* s, size_t n_links, size_t n_obs) {
+    if (n_links <= s->n_links_cap && n_obs <= s->n_obs_cap && s->d_mask != nullptr) {
+        return 0;
+    }
+    aabb_scratch_free(s);
+    cudaError_t err;
+    err = cudaMalloc(reinterpret_cast<void**>(&s->d_lmin), n_links * 3 * sizeof(float));
+    if (err != cudaSuccess) { aabb_scratch_free(s); return static_cast<int>(err); }
+    err = cudaMalloc(reinterpret_cast<void**>(&s->d_lmax), n_links * 3 * sizeof(float));
+    if (err != cudaSuccess) { aabb_scratch_free(s); return static_cast<int>(err); }
+    err = cudaMalloc(reinterpret_cast<void**>(&s->d_omin), n_obs * 3 * sizeof(float));
+    if (err != cudaSuccess) { aabb_scratch_free(s); return static_cast<int>(err); }
+    err = cudaMalloc(reinterpret_cast<void**>(&s->d_omax), n_obs * 3 * sizeof(float));
+    if (err != cudaSuccess) { aabb_scratch_free(s); return static_cast<int>(err); }
+    err = cudaMalloc(reinterpret_cast<void**>(&s->d_mask), n_links * n_obs);
+    if (err != cudaSuccess) { aabb_scratch_free(s); return static_cast<int>(err); }
+    s->n_links_cap = n_links;
+    s->n_obs_cap = n_obs;
+    return 0;
+}
+
+static int aabb_args_ok(
+    const float* link_min,
+    const float* link_max,
+    size_t n_links,
+    const float* obs_min,
+    const float* obs_max,
+    size_t n_obs,
+    unsigned char* out
+) {
+    if (out == nullptr) {
+        return static_cast<int>(cudaErrorInvalidValue);
+    }
+    if (n_links > 0 && (link_min == nullptr || link_max == nullptr)) {
+        return static_cast<int>(cudaErrorInvalidValue);
+    }
+    if (n_obs > 0 && (obs_min == nullptr || obs_max == nullptr)) {
+        return static_cast<int>(cudaErrorInvalidValue);
+    }
+    return 0;
+}
+
+// Device path. Caller holds g_aabb_mu. Non-zero = fall back to host fill.
+static int aabb_mask_gpu(
+    const float* link_min,
+    const float* link_max,
+    size_t n_links,
+    const float* obs_min,
+    const float* obs_max,
+    size_t n_obs,
+    unsigned char* mask
+) {
+    int rc = aabb_scratch_reserve(&g_aabb, n_links, n_obs);
+    if (rc != 0) {
+        return rc;
+    }
+    const size_t pairs = n_links * n_obs;
+    cudaError_t err;
+    err = cudaMemcpy(g_aabb.d_lmin, link_min, n_links * 3 * sizeof(float), cudaMemcpyHostToDevice);
+    if (err != cudaSuccess) return static_cast<int>(err);
+    err = cudaMemcpy(g_aabb.d_lmax, link_max, n_links * 3 * sizeof(float), cudaMemcpyHostToDevice);
+    if (err != cudaSuccess) return static_cast<int>(err);
+    err = cudaMemcpy(g_aabb.d_omin, obs_min, n_obs * 3 * sizeof(float), cudaMemcpyHostToDevice);
+    if (err != cudaSuccess) return static_cast<int>(err);
+    err = cudaMemcpy(g_aabb.d_omax, obs_max, n_obs * 3 * sizeof(float), cudaMemcpyHostToDevice);
+    if (err != cudaSuccess) return static_cast<int>(err);
+
+    int launch_rc = shield_cuda_launch_aabb_mask(
+        g_aabb.d_lmin, g_aabb.d_lmax, n_links,
+        g_aabb.d_omin, g_aabb.d_omax, n_obs,
+        g_aabb.d_mask, /*stream=*/0);
+    if (launch_rc != 0) {
+        return launch_rc;
+    }
+    err = cudaMemcpy(mask, g_aabb.d_mask, pairs, cudaMemcpyDeviceToHost);
+    return static_cast<int>(err);
+}
+
+extern "C" int shield_cuda_aabb_mask(
+    const float* link_min,
+    const float* link_max,
+    size_t n_links,
+    const float* obs_min,
+    const float* obs_max,
+    size_t n_obs,
+    unsigned char* mask
+) {
+    int bad = aabb_args_ok(link_min, link_max, n_links, obs_min, obs_max, n_obs, mask);
+    if (bad != 0) {
+        return bad;
+    }
+    if (n_links == 0 || n_obs == 0) {
+        return 0;
+    }
+    const size_t pairs = n_links * n_obs;
+    if (pairs >= kMinGpuPairs) {
+        std::lock_guard<std::mutex> lock(g_aabb_mu);
+        if (aabb_mask_gpu(
+                link_min, link_max, n_links, obs_min, obs_max, n_obs, mask) == 0) {
+            return 0;
+        }
+    }
+    shield_cuda_aabb_mask_host(
+        link_min, link_max, n_links, obs_min, obs_max, n_obs, mask);
+    return 0;
+}
+
 extern "C" int shield_cuda_aabb_hits(
     const float* link_min,
     const float* link_max,
@@ -222,25 +365,35 @@ extern "C" int shield_cuda_aabb_hits(
     size_t n_obs,
     unsigned char* hits
 ) {
-    if ((n_links > 0 && (link_min == nullptr || link_max == nullptr || hits == nullptr)) ||
-        (n_obs > 0 && (obs_min == nullptr || obs_max == nullptr))) {
+    int bad = aabb_args_ok(link_min, link_max, n_links, obs_min, obs_max, n_obs, hits);
+    if (bad != 0) {
+        return bad;
+    }
+    if (n_links == 0) {
+        return 0;
+    }
+    if (n_obs == 0) {
+        memset(hits, 0, n_links);
+        return 0;
+    }
+    unsigned char* mask = static_cast<unsigned char*>(malloc(n_links * n_obs));
+    if (mask == nullptr) {
         return static_cast<int>(cudaErrorInvalidValue);
     }
-    for (size_t i = 0; i < n_links; ++i) {
-        unsigned char hit = 0;
-        const float* a0 = link_min + i * 3;
-        const float* a1 = link_max + i * 3;
-        for (size_t j = 0; j < n_obs; ++j) {
-            const float* b0 = obs_min + j * 3;
-            const float* b1 = obs_max + j * 3;
-            if (a0[0] <= b1[0] && a1[0] >= b0[0] &&
-                a0[1] <= b1[1] && a1[1] >= b0[1] &&
-                a0[2] <= b1[2] && a1[2] >= b0[2]) {
-                hit = 1;
-                break;
+    int rc = shield_cuda_aabb_mask(
+        link_min, link_max, n_links, obs_min, obs_max, n_obs, mask);
+    if (rc == 0) {
+        for (size_t i = 0; i < n_links; ++i) {
+            unsigned char hit = 0;
+            for (size_t j = 0; j < n_obs; ++j) {
+                if (mask[i * n_obs + j]) {
+                    hit = 1;
+                    break;
+                }
             }
+            hits[i] = hit;
         }
-        hits[i] = hit;
     }
-    return 0;
+    free(mask);
+    return rc;
 }

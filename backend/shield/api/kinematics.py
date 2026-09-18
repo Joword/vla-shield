@@ -116,11 +116,11 @@ _SYNTH_RADIUS = 0.045
 
 
 def default_urdf_for_dof(dof: int) -> tuple[Path, str, str] | None:
-    """Bundled UR5 (6) or Panda (7). Path + root + EE link names, or None."""
-    if dof == 6 and UR5_URDF.is_file():
-        return UR5_URDF, "base_link", "wrist_3_link"
+    """Bundled Panda (7) or UR5 (6, and 8+ mobile stacks using the arm prefix)."""
     if dof == 7 and PANDA_URDF.is_file():
         return PANDA_URDF, "panda_link0", "panda_hand"
+    if dof >= 6 and UR5_URDF.is_file():
+        return UR5_URDF, "base_link", "wrist_3_link"
     return None
 
 
@@ -293,6 +293,11 @@ def load_urdf_chain(path: str, root: str, ee: str) -> UrdfChain:
     return UrdfChain(joints=chain, root=root, ee=ee)
 
 
+# Same skip / joint-graze deflate as runtime/shield-collision/src/narrow_phase.rs.
+SELF_SKIP_ADJACENT = 2
+SELF_DEFLATE = 0.045
+
+
 def aabb_intersects(
     a_min: list[float],
     a_max: list[float],
@@ -310,6 +315,40 @@ def aabb_intersects(
     )
 
 
+def confirm_aabb_hit(
+    a_min: list[float],
+    a_max: list[float],
+    b_min: list[float],
+    b_max: list[float],
+    deflate: float = 0.0,
+) -> bool:
+    """Keep a broad-phase pair if boxes still overlap after shrinking `deflate`."""
+    if deflate <= 0.0:
+        return aabb_intersects(a_min, a_max, b_min, b_max)
+    a2_min = [a_min[0] + deflate, a_min[1] + deflate, a_min[2] + deflate]
+    a2_max = [a_max[0] - deflate, a_max[1] - deflate, a_max[2] - deflate]
+    b2_min = [b_min[0] + deflate, b_min[1] + deflate, b_min[2] + deflate]
+    b2_max = [b_max[0] - deflate, b_max[1] - deflate, b_max[2] - deflate]
+    if a2_max[0] < a2_min[0] or b2_max[0] < b2_min[0]:
+        return aabb_intersects(a_min, a_max, b_min, b_max)
+    return aabb_intersects(a2_min, a2_max, b2_min, b2_max)
+
+
+def self_collision_pairs(
+    boxes: list[tuple[str, list[float], list[float]]],
+) -> list[tuple[str, str]]:
+    """Non-adjacent link vs link. Chain order; skip parent/child."""
+    n = len(boxes)
+    hits: list[tuple[str, str]] = []
+    if n < SELF_SKIP_ADJACENT + 2:
+        return hits
+    for i in range(n):
+        for j in range(i + 1 + SELF_SKIP_ADJACENT, n):
+            if confirm_aabb_hit(boxes[i][1], boxes[i][2], boxes[j][1], boxes[j][2], SELF_DEFLATE):
+                hits.append((boxes[i][0], boxes[j][0]))
+    return hits
+
+
 def point_in_aabb(p: list[float], bmin: list[float], bmax: list[float]) -> bool:
     """Inclusive point-in-box."""
     return (
@@ -323,8 +362,10 @@ def collision_pairs(
     joints: list[float],
     obstacles: list[dict],
     chain: UrdfChain | None = None,
+    *,
+    epsilon: float = 0.02,
 ) -> list[tuple[str, str]]:
-    """(link, obstacle) AABB hits.
+    """(link, obstacle) AABB hits, then non-adjacent self-collision.
 
     Skip PHY.FORBIDDEN_ZONE here — that's an EE point check in forbidden_zone_hits.
     """
@@ -337,12 +378,14 @@ def collision_pairs(
     else:
         boxes = chain.link_aabbs(joints)
     hits: list[tuple[str, str]] = []
+    deflate = max(0.0, epsilon * 0.25)
     for link, mn, mx in boxes:
         for obs in scene:
             omin = [float(v) for v in obs["min"]]
             omax = [float(v) for v in obs["max"]]
-            if aabb_intersects(mn, mx, omin, omax):
+            if confirm_aabb_hit(mn, mx, omin, omax, deflate):
                 hits.append((link, str(obs.get("label") or obs.get("id") or "obstacle")))
+    hits.extend(self_collision_pairs(boxes))
     return hits
 
 

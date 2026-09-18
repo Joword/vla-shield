@@ -23,7 +23,20 @@ impl PhysicalProjector for KinematicClampProjector {
         for i in 0..ndof {
             let raw_vel = action.data[i] as f64;
             let v_max = ctx.limits.velocity_max[i];
-            let vel = raw_vel.clamp(-v_max, v_max);
+            let mut vel = raw_vel.clamp(-v_max, v_max);
+            if ctx.prev_velocity.len() == ndof && ctx.dt > 0.0 {
+                let a_max = ctx
+                    .limits
+                    .acceleration_max
+                    .get(i)
+                    .copied()
+                    .unwrap_or(f64::INFINITY);
+                if a_max.is_finite() {
+                    let prev = ctx.prev_velocity[i];
+                    let da = a_max * ctx.dt;
+                    vel = vel.clamp(prev - da, prev + da);
+                }
+            }
 
             let pos = ctx.current_joints[i] + vel * ctx.dt;
             let pos = pos.clamp(ctx.limits.position_min[i], ctx.limits.position_max[i]);
@@ -33,7 +46,7 @@ impl PhysicalProjector for KinematicClampProjector {
         }
 
         let (ee_position, ee_orientation) = if let Some(chain) = ctx.urdf_chain {
-            if chain.dof() != ndof {
+            if chain.dof() > ndof {
                 return Err(shieldError::DimensionMismatch {
                     expected: chain.dof(),
                     got: ndof,
@@ -110,6 +123,7 @@ mod tests {
             urdf_chain: None,
             forbidden_zones: &[],
             semantic_constraints: &[],
+            prev_velocity: &[],
         };
         let action = ActionVector::new(0, 1, vec![0.5, -0.5, 0.0]);
         let prop = proj.project(&ctx, &action).unwrap();
@@ -131,6 +145,7 @@ mod tests {
             urdf_chain: None,
             forbidden_zones: &[],
             semantic_constraints: &[],
+            prev_velocity: &[],
         };
         let action = ActionVector::new(0, 1, vec![999.0, -999.0]);
         let prop = proj.project(&ctx, &action).unwrap();
@@ -152,8 +167,32 @@ mod tests {
             urdf_chain: None,
             forbidden_zones: &[],
             semantic_constraints: &[],
+            prev_velocity: &[],
         };
         let action = ActionVector::new(0, 1, vec![0.5, -0.5]);
         assert!(proj.project(&ctx, &action).is_err());
+    }
+
+    #[test]
+    fn acceleration_clamp_uses_prev_velocity() {
+        let proj = KinematicClampProjector;
+        let limits = make_limits(1);
+        let scene = SceneGraph::default();
+        let current = vec![0.0];
+        let prev = [0.0];
+        let ctx = ProjectionContext {
+            current_joints: &current,
+            limits: &limits,
+            scene: &scene,
+            dt: 0.01,
+            urdf_chain: None,
+            forbidden_zones: &[],
+            semantic_constraints: &[],
+            prev_velocity: &prev,
+        };
+        // a_max = 5, dt = 0.01 → |Δv| ≤ 0.05 even if the command is 999.
+        let action = ActionVector::new(0, 1, vec![999.0]);
+        let prop = proj.project(&ctx, &action).unwrap();
+        assert!((prop.joint_velocities[0] - 0.05).abs() < 1e-9);
     }
 }

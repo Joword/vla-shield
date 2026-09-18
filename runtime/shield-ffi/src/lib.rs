@@ -216,15 +216,17 @@ impl PyShieldPipeline {
     /// becomes a `Vec<f32>` (one alloc). If you already have a contiguous
     /// ndarray, use `evaluate_numpy` and skip that copy.
     /// `current_joints` in rad. `t_ns` / `sequence_id` are just stamped on.
-    #[pyo3(signature = (action, current_joints, t_ns = 0, sequence_id = 0))]
+    #[pyo3(signature = (action, current_joints, t_ns = 0, sequence_id = 0, prev_velocity = None))]
     fn evaluate(
         &self,
         action: Vec<f32>,
         current_joints: Vec<f64>,
         t_ns: u64,
         sequence_id: u64,
+        prev_velocity: Option<Vec<f32>>,
     ) -> PyResult<PyDecision> {
-        self.evaluate_impl(&action, &current_joints, t_ns, sequence_id)
+        let prev = prev_velocity.unwrap_or_default();
+        self.evaluate_impl(&action, &current_joints, t_ns, sequence_id, &prev)
     }
 
     /// Zero-copy path: borrows contiguous numpy arrays.
@@ -232,13 +234,14 @@ impl PyShieldPipeline {
     /// Skips the list → `Vec` copy that `evaluate` pays. Needs contiguous
     /// `float32` action + `float64` joints; anything else raises.
     /// On a 6–14 DoF arm that's maybe 1–3 µs, mostly on `current_joints`.
-    #[pyo3(signature = (action, current_joints, t_ns = 0, sequence_id = 0))]
+    #[pyo3(signature = (action, current_joints, t_ns = 0, sequence_id = 0, prev_velocity = None))]
     fn evaluate_numpy(
         &self,
         action: PyReadonlyArray1<'_, f32>,
         current_joints: PyReadonlyArray1<'_, f64>,
         t_ns: u64,
         sequence_id: u64,
+        prev_velocity: Option<PyReadonlyArray1<'_, f32>>,
     ) -> PyResult<PyDecision> {
         let action_slice = action.as_slice().map_err(|_| {
             pyo3::exceptions::PyValueError::new_err(
@@ -250,7 +253,24 @@ impl PyShieldPipeline {
                 "evaluate_numpy: current_joints must be a contiguous numpy.ndarray[float64]",
             )
         })?;
-        self.evaluate_impl(action_slice, current_slice, t_ns, sequence_id)
+        let prev_owned: Vec<f32> = match prev_velocity {
+            Some(arr) => arr
+                .as_slice()
+                .map_err(|_| {
+                    pyo3::exceptions::PyValueError::new_err(
+                        "evaluate_numpy: prev_velocity must be a contiguous numpy.ndarray[float32]",
+                    )
+                })?
+                .to_vec(),
+            None => Vec::new(),
+        };
+        self.evaluate_impl(
+            action_slice,
+            current_slice,
+            t_ns,
+            sequence_id,
+            &prev_owned,
+        )
     }
 
     /// Replace scene obstacles. Each tuple is
@@ -298,6 +318,7 @@ impl PyShieldPipeline {
         current_joints: &[f64],
         t_ns: u64,
         sequence_id: u64,
+        prev_velocity: &[f32],
     ) -> PyResult<PyDecision> {
         use std::time::Instant;
 
@@ -364,6 +385,7 @@ impl PyShieldPipeline {
             pyo3::exceptions::PyRuntimeError::new_err("scene lock poisoned")
         })?;
         let scene = &scene_guard.scene;
+        let prev_f64: Vec<f64> = prev_velocity.iter().map(|v| *v as f64).collect();
         let proj_ctx = ProjectionContext {
             current_joints,
             limits: &self.limits,
@@ -372,6 +394,7 @@ impl PyShieldPipeline {
             urdf_chain: self.urdf_chain.as_ref(),
             forbidden_zones: &scene_guard.forbidden,
             semantic_constraints: &[],
+            prev_velocity: &prev_f64,
         };
 
         let physics_start = Instant::now();

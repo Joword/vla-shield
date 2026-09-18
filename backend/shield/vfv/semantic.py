@@ -16,7 +16,7 @@ from typing import Callable, Iterable
 import numpy as np
 
 from shield.vfv.clip_backend import try_load_clip
-from shield.vfv.image_cues import image_cue_scores
+from shield.vfv.image_cues import cue_config, image_cue_scores
 from shield.vfv.predictor import VFVPredictor, VFVResult
 
 # Match phrases against *hints*, not the short task field
@@ -90,11 +90,12 @@ class SemanticVFVPredictor(VFVPredictor):
             scores[oid] = max(scores.get(oid, 0.0), float(val))
             cue_used = True
 
-        # Drop SEM.HUMAN_PROXIMITY if the arm is basically parked.
-        # The rule is `warn`; leave ranking to the registry.
+        # Drop SEM.HUMAN_PROXIMITY if EE command is below the rule's
+        # velocity_threshold_ms (default 0.3). The rule is `warn`.
+        v_cap = cue_config().human_velocity_threshold
         if "SEM.HUMAN_PROXIMITY" in scores and action:
             ee_speed = float(max(abs(v) for v in action))
-            if ee_speed < 0.05:
+            if ee_speed < v_cap:
                 scores.pop("SEM.HUMAN_PROXIMITY", None)
 
         triggered = sorted(scores)

@@ -1,6 +1,6 @@
-//! Optional CUDA clamp. Skip it for a 7-DoF arm.
+//! Optional CUDA clamp and AABB overlap. Skip the GPU for a 7-DoF arm.
 //!
-//! Two APIs:
+//! Clamp APIs:
 //!
 //! 1. **One-shot** — [`clamp_action_cuda`]. Fine for tests. Allocates /
 //!    copies / frees every call. Don't put this on the hot path.
@@ -8,6 +8,11 @@
 //!    buffers, three pinned host buffers, one stream. Reuse it and you skip
 //!    `cudaMalloc` per tick. Independent pipelines don't serialize on the
 //!    default stream.
+//!
+//! Collision: [`aabb_overlap_mask`] returns a row-major N×M mask so the
+//! arbiter still knows which `(link, obstacle)` pair hit. Below 64 pairs the
+//! C backend stays on the host; denser scenes take the kernel when this crate
+//! was built with nvcc.
 //!
 //! Same C ABI on both the real kernel and the CPU stub (no nvcc). Call sites
 //! don't need `#[cfg]`.
@@ -48,6 +53,16 @@ extern "C" {
         n_obs: usize,
         hits: *mut u8,
     ) -> i32;
+
+    fn shield_cuda_aabb_mask(
+        link_min: *const f32,
+        link_max: *const f32,
+        n_links: usize,
+        obs_min: *const f32,
+        obs_max: *const f32,
+        n_obs: usize,
+        mask: *mut u8,
+    ) -> i32;
 }
 
 #[derive(Debug, Error)]
@@ -85,6 +100,16 @@ pub fn min_gpu_n_from_env() -> usize {
     }
 }
 
+/// True when `build.rs` compiled the nvcc kernels. False on the CPU stub
+/// (missing nvcc, `CUDA_DISABLE`, or handled `cl.exe` miss).
+pub fn gpu_kernel_compiled() -> bool {
+    cfg!(has_cuda_kernel)
+}
+
+/// Inverse of [`gpu_kernel_compiled`]. Missing `cl.exe` lands here.
+pub fn cpu_stub_compiled() -> bool {
+    cfg!(cuda_cpu_stub)
+}
 /// Scalar clamp matching `clamp_stub.cpp` and the CUDA kernel:
 /// `out[i]` = `in[i]` clipped to `[-limit[i], limit[i]]`.
 pub fn clamp_cpu(input: &[f32], limit: &[f32], output: &mut [f32]) {
@@ -272,9 +297,7 @@ pub fn is_cuda_kernel_enabled() -> bool {
 
 /// Packed AABB: `[min_x, min_y, min_z]` / `[max_x, max_y, max_z]` per box.
 ///
-/// `hits[i] = 1` if link `i` overlaps any obstacle. Typical VLA scenes are a
-/// handful of links × a handful of obstacles, so this is a host loop on both
-/// backends (same C ABI).
+/// `hits[i] = 1` if link `i` overlaps any obstacle.
 pub fn aabb_hits(
     link_min: &[[f32; 3]],
     link_max: &[[f32; 3]],
@@ -282,25 +305,7 @@ pub fn aabb_hits(
     obs_max: &[[f32; 3]],
     hits: &mut [u8],
 ) -> Result<(), CudaError> {
-    if link_min.len() != link_max.len() {
-        return Err(CudaError::DimensionMismatch {
-            input: link_min.len(),
-            limit: link_max.len(),
-        });
-    }
-    if obs_min.len() != obs_max.len() {
-        return Err(CudaError::DimensionMismatch {
-            input: obs_min.len(),
-            limit: obs_max.len(),
-        });
-    }
-    if hits.len() < link_min.len() {
-        return Err(CudaError::OutputTooSmall {
-            need: link_min.len(),
-            got: hits.len(),
-        });
-    }
-    let n = link_min.len();
+    let n = check_aabb_lengths(link_min, link_max, obs_min, obs_max, hits.len())?;
     let m = obs_min.len();
     let code = unsafe {
         shield_cuda_aabb_hits(
@@ -317,6 +322,78 @@ pub fn aabb_hits(
         return Err(CudaError::Backend(code));
     }
     Ok(())
+}
+
+/// Row-major N×M overlap mask: `mask[i * n_obs + j] = 1` if link `i` hits
+/// obstacle `j`. Below 64 pairs the C backend stays on the host; denser
+/// scenes take the CUDA kernel when this crate was built with nvcc.
+pub fn aabb_overlap_mask(
+    link_min: &[[f32; 3]],
+    link_max: &[[f32; 3]],
+    obs_min: &[[f32; 3]],
+    obs_max: &[[f32; 3]],
+) -> Result<Vec<u8>, CudaError> {
+    if link_min.len() != link_max.len() {
+        return Err(CudaError::DimensionMismatch {
+            input: link_min.len(),
+            limit: link_max.len(),
+        });
+    }
+    if obs_min.len() != obs_max.len() {
+        return Err(CudaError::DimensionMismatch {
+            input: obs_min.len(),
+            limit: obs_max.len(),
+        });
+    }
+    let n = link_min.len();
+    let m = obs_min.len();
+    if n == 0 || m == 0 {
+        return Ok(vec![0u8; n * m]);
+    }
+    let mut mask = vec![0u8; n * m];
+    let code = unsafe {
+        shield_cuda_aabb_mask(
+            link_min.as_ptr() as *const f32,
+            link_max.as_ptr() as *const f32,
+            n,
+            obs_min.as_ptr() as *const f32,
+            obs_max.as_ptr() as *const f32,
+            m,
+            mask.as_mut_ptr(),
+        )
+    };
+    if code != 0 {
+        return Err(CudaError::Backend(code));
+    }
+    Ok(mask)
+}
+
+fn check_aabb_lengths(
+    link_min: &[[f32; 3]],
+    link_max: &[[f32; 3]],
+    obs_min: &[[f32; 3]],
+    obs_max: &[[f32; 3]],
+    hits_len: usize,
+) -> Result<usize, CudaError> {
+    if link_min.len() != link_max.len() {
+        return Err(CudaError::DimensionMismatch {
+            input: link_min.len(),
+            limit: link_max.len(),
+        });
+    }
+    if obs_min.len() != obs_max.len() {
+        return Err(CudaError::DimensionMismatch {
+            input: obs_min.len(),
+            limit: obs_max.len(),
+        });
+    }
+    if hits_len < link_min.len() {
+        return Err(CudaError::OutputTooSmall {
+            need: link_min.len(),
+            got: hits_len,
+        });
+    }
+    Ok(link_min.len())
 }
 
 #[cfg(test)]
@@ -452,5 +529,104 @@ mod tests {
         let miss_max = [[3.0_f32, 3.0, 3.0]];
         aabb_hits(&link_min, &link_max, &miss_min, &miss_max, &mut hits).unwrap();
         assert_eq!(hits[0], 0);
+    }
+
+    #[test]
+    fn aabb_mask_matches_per_link_hits() {
+        let link_min = [[0.0_f32, 0.0, 0.0], [10.0, 10.0, 10.0]];
+        let link_max = [[1.0_f32, 1.0, 1.0], [11.0, 11.0, 11.0]];
+        let obs_min = [[0.5_f32, 0.5, 0.5], [20.0, 20.0, 20.0]];
+        let obs_max = [[1.5_f32, 1.5, 1.5], [21.0, 21.0, 21.0]];
+        let mask = aabb_overlap_mask(&link_min, &link_max, &obs_min, &obs_max).unwrap();
+        assert_eq!(mask, vec![1, 0, 0, 0]);
+        let mut hits = [0u8; 2];
+        aabb_hits(&link_min, &link_max, &obs_min, &obs_max, &mut hits).unwrap();
+        assert_eq!(hits, [1, 0]);
+    }
+
+    #[test]
+    fn aabb_mask_dense_scene_agrees_with_cpu() {
+        // 8×8 = 64 pairs: C backend may take the kernel path.
+        let n = 8usize;
+        let mut link_min = vec![[0.0_f32; 3]; n];
+        let mut link_max = vec![[0.0_f32; 3]; n];
+        let mut obs_min = vec![[0.0_f32; 3]; n];
+        let mut obs_max = vec![[0.0_f32; 3]; n];
+        for i in 0..n {
+            let x = i as f32 * 2.0;
+            link_min[i] = [x, 0.0, 0.0];
+            link_max[i] = [x + 1.5, 1.0, 1.0];
+            obs_min[i] = [x + 1.0, 0.0, 0.0];
+            obs_max[i] = [x + 2.0, 1.0, 1.0];
+        }
+        let mask = aabb_overlap_mask(&link_min, &link_max, &obs_min, &obs_max).unwrap();
+        assert_eq!(mask.len(), n * n);
+        for i in 0..n {
+            for j in 0..n {
+                let overlap = link_min[i][0] <= obs_max[j][0]
+                    && link_max[i][0] >= obs_min[j][0]
+                    && link_min[i][1] <= obs_max[j][1]
+                    && link_max[i][1] >= obs_min[j][1]
+                    && link_min[i][2] <= obs_max[j][2]
+                    && link_max[i][2] >= obs_min[j][2];
+                assert_eq!(mask[i * n + j] == 1, overlap, "i={i} j={j}");
+            }
+        }
+    }
+
+    #[test]
+    fn aabb_mask_empty_obstacles() {
+        let link_min = [[0.0_f32, 0.0, 0.0]];
+        let link_max = [[1.0_f32, 1.0, 1.0]];
+        let empty: [[f32; 3]; 0] = [];
+        let mask = aabb_overlap_mask(&link_min, &link_max, &empty, &empty).unwrap();
+        assert!(mask.is_empty());
+        let mut hits = [1u8; 1];
+        aabb_hits(&link_min, &link_max, &empty, &empty, &mut hits).unwrap();
+        assert_eq!(hits[0], 0);
+    }
+
+    #[test]
+    fn aabb_mask_dimension_mismatch() {
+        let link_min = [[0.0_f32, 0.0, 0.0]];
+        let link_max = [[1.0_f32, 1.0, 1.0], [2.0, 2.0, 2.0]];
+        let obs_min = [[0.0_f32, 0.0, 0.0]];
+        let obs_max = [[1.0_f32, 1.0, 1.0]];
+        let err = aabb_overlap_mask(&link_min, &link_max, &obs_min, &obs_max).unwrap_err();
+        assert!(matches!(err, CudaError::DimensionMismatch { .. }));
+    }
+
+    #[test]
+    fn aabb_hits_output_too_small() {
+        let link_min = [[0.0_f32, 0.0, 0.0], [2.0, 2.0, 2.0]];
+        let link_max = [[1.0_f32, 1.0, 1.0], [3.0, 3.0, 3.0]];
+        let obs_min = [[0.0_f32, 0.0, 0.0]];
+        let obs_max = [[1.0_f32, 1.0, 1.0]];
+        let mut hits = [0u8; 1];
+        let err = aabb_hits(&link_min, &link_max, &obs_min, &obs_max, &mut hits).unwrap_err();
+        assert!(matches!(err, CudaError::OutputTooSmall { need: 2, got: 1 }));
+    }
+
+    #[test]
+    fn backend_cfg_is_exclusive() {
+        assert_ne!(
+            gpu_kernel_compiled(),
+            cpu_stub_compiled(),
+            "build.rs must set exactly one of has_cuda_kernel / cuda_cpu_stub"
+        );
+        assert_eq!(gpu_kernel_compiled(), cfg!(has_cuda_kernel));
+        assert_eq!(cpu_stub_compiled(), cfg!(cuda_cpu_stub));
+    }
+
+    #[test]
+    fn stub_or_kernel_agrees_with_cpu_clamp() {
+        let input = [2.0_f32, -3.0, 0.2];
+        let limit = [1.0_f32, 1.5, 1.0];
+        let backend = clamp_action_cuda(&input, &limit).unwrap();
+        let mut cpu = [0.0_f32; 3];
+        clamp_cpu(&input, &limit, &mut cpu);
+        for i in 0..3 {
+            assert!((cpu[i] - backend[i]).abs() < 1e-6);
+        }
     }
 }

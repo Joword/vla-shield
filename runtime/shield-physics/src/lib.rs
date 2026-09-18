@@ -1,3 +1,4 @@
+pub mod calibration;
 pub mod checks;
 pub mod projection;
 pub mod semantic;
@@ -7,6 +8,7 @@ use shield_core::error::Result;
 use shield_core::scene::SceneGraph;
 use shield_core::types::JointLimits;
 
+pub use calibration::{phy_calibration, PhyCalibration};
 pub use checks::{extra_physical_reasons, ontology_for_projection_error};
 pub use semantic::{SemanticConstraint, SemanticConstraintMapper};
 
@@ -31,6 +33,8 @@ pub struct ProjectionContext<'a> {
     pub forbidden_zones: &'a [shield_urdf::AxisAlignedBox],
     /// Live SEM.* constraints (heat, humans, …).
     pub semantic_constraints: &'a [SemanticConstraint],
+    /// Last tick's joint velocity. Empty → skip acceleration clamp.
+    pub prev_velocity: &'a [f64],
 }
 
 /// Turn a VLA command into a physical proposal (joints + EE).

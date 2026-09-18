@@ -9,6 +9,7 @@ description = "Broad-phase and narrow-phase collision precheck for VLA-Shield"
 shield-core = { workspace = true }
 shield-physics = { workspace = true }
 shield-urdf = { workspace = true }
+shield-cuda = { workspace = true }
 nalgebra = { workspace = true }
 thiserror = { workspace = true }
 tracing = { workspace = true }

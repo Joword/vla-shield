@@ -85,6 +85,10 @@ impl ShieldLifecycleHooks {
         self.armed
     }
 
+    pub fn pipeline(&self) -> Option<&SafetyPipeline> {
+        self.pipeline.as_ref()
+    }
+
     /// Evaluate while active. Inactive → BLOCK + zeros.
     pub fn evaluate(
         &self,
@@ -107,16 +111,19 @@ impl ShieldLifecycleHooks {
 }
 
 /// Call this from your `rclrs` context after `rclrs::init` when `ros2` is on.
+/// Bind [`crate::rclrs_bind_table`] topics 1:1 onto the node.
 #[cfg(feature = "ros2")]
 pub fn log_rclrs_build_stub() {
     tracing::warn!(
-        "rclrs feature is on: link against the ROS 2 workspace and register publishers/subscribers here"
+        "rclrs feature is on: register overlay_bindings() publishers/subscribers on the ROS 2 node"
     );
 }
 
 #[cfg(not(feature = "ros2"))]
 pub fn log_rclrs_build_stub() {
-    tracing::debug!("rclrs feature off: build with `--features ros2` inside a ROS 2 environment");
+    tracing::debug!(
+        "rclrs feature off: bind crate::rclrs_bind_table inside a ROS 2 environment with --features ros2"
+    );
 }
 
 #[cfg(test)]
@@ -145,6 +152,7 @@ mod tests {
                 t_ns: 0,
                 action: vec![0.1; 6],
                 current_joints: vec![0.0; 6],
+                prev_velocity: vec![],
             },
             &limits(6),
             &SceneGraph::default(),
@@ -170,6 +178,7 @@ mod tests {
                 t_ns: 0,
                 action: vec![0.05; 6],
                 current_joints: vec![0.0; 6],
+                prev_velocity: vec![],
             },
             &limits(6),
             &SceneGraph::default(),

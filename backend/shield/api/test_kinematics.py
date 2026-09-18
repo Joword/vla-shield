@@ -3,9 +3,11 @@
 from __future__ import annotations
 
 from shield.api.kinematics import (
+    confirm_aabb_hit,
     default_urdf_for_dof,
     fk_skeleton_for,
     load_urdf_chain,
+    self_collision_pairs,
 )
 
 
@@ -34,3 +36,41 @@ def test_ur5_zero_pose_reaches_forward() -> None:
     assert abs(ee_xyz[0]) + abs(ee_xyz[1]) + abs(ee_xyz[2]) > 0.2
     via = fk_skeleton_for([0.0] * 6, chain)
     assert via[-1] == skel[-1]
+
+
+def test_adjacent_links_are_skipped() -> None:
+    boxes = [
+        ("l0", [0.0, 0.0, 0.0], [1.0, 1.0, 1.0]),
+        ("l1", [0.5, 0.5, 0.5], [1.5, 1.5, 1.5]),
+        ("l2", [0.4, 0.4, 0.4], [1.4, 1.4, 1.4]),
+    ]
+    assert self_collision_pairs(boxes) == []
+
+
+def test_nonadjacent_overlap_is_self_collision() -> None:
+    far = ([10.0, 10.0, 10.0], [11.0, 11.0, 11.0])
+    boxes = [
+        ("l0", [0.0, 0.0, 0.0], [1.0, 1.0, 1.0]),
+        ("l1", far[0], far[1]),
+        ("l2", far[0], far[1]),
+        ("l3", [0.2, 0.2, 0.2], [0.8, 0.8, 0.8]),
+    ]
+    pairs = self_collision_pairs(boxes)
+    assert pairs == [("l0", "l3")]
+
+
+def test_confirm_deflate_drops_grazing_hit() -> None:
+    assert confirm_aabb_hit(
+        [0.0, 0.0, 0.0],
+        [1.0, 1.0, 1.0],
+        [0.99, 0.0, 0.0],
+        [2.0, 1.0, 1.0],
+        0.02,
+    ) is False
+    assert confirm_aabb_hit(
+        [0.0, 0.0, 0.0],
+        [1.0, 1.0, 1.0],
+        [0.2, 0.2, 0.2],
+        [0.8, 0.8, 0.8],
+        0.02,
+    ) is True

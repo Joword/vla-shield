@@ -73,6 +73,44 @@ extern "C" int shield_cuda_ctx_clamp(
     return clamp_loop(host_input, host_limit, host_output, n);
 }
 
+extern "C" int shield_cuda_aabb_mask(
+    const float* link_min,
+    const float* link_max,
+    size_t n_links,
+    const float* obs_min,
+    const float* obs_max,
+    size_t n_obs,
+    unsigned char* mask
+) {
+    if (mask == nullptr) {
+        return 1;
+    }
+    if (n_links > 0 && (link_min == nullptr || link_max == nullptr)) {
+        return 1;
+    }
+    if (n_obs > 0 && (obs_min == nullptr || obs_max == nullptr)) {
+        return 1;
+    }
+    if (n_links == 0 || n_obs == 0) {
+        return 0;
+    }
+    for (size_t i = 0; i < n_links; ++i) {
+        const float* a0 = link_min + i * 3;
+        const float* a1 = link_max + i * 3;
+        for (size_t j = 0; j < n_obs; ++j) {
+            const float* b0 = obs_min + j * 3;
+            const float* b1 = obs_max + j * 3;
+            mask[i * n_obs + j] =
+                (a0[0] <= b1[0] && a1[0] >= b0[0] &&
+                 a0[1] <= b1[1] && a1[1] >= b0[1] &&
+                 a0[2] <= b1[2] && a1[2] >= b0[2])
+                    ? 1
+                    : 0;
+        }
+    }
+    return 0;
+}
+
 extern "C" int shield_cuda_aabb_hits(
     const float* link_min,
     const float* link_max,
@@ -85,6 +123,15 @@ extern "C" int shield_cuda_aabb_hits(
     if ((n_links > 0 && (link_min == nullptr || link_max == nullptr || hits == nullptr)) ||
         (n_obs > 0 && (obs_min == nullptr || obs_max == nullptr))) {
         return 1;
+    }
+    if (n_links == 0) {
+        return 0;
+    }
+    if (n_obs == 0) {
+        for (size_t i = 0; i < n_links; ++i) {
+            hits[i] = 0;
+        }
+        return 0;
     }
     for (size_t i = 0; i < n_links; ++i) {
         unsigned char hit = 0;
